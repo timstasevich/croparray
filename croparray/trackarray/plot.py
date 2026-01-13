@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import matplotlib.pyplot as plt
+import xarray as xr
 
 
+__all__ = ["plot_trackarray_crops","plot_track_signal_traces"]
 
 def plot_trackarray_crops(
-    data,
+    ds,
     fov=0,
     track_id=1,
     t=(0, 10, 3),
@@ -19,14 +21,16 @@ def plot_trackarray_crops(
 ):
     """
     Plot track-centered image crops across time and channels using xarray.plot.imshow.
-
+    
+    Shows optional RGB composites and per-channel grayscale panels; returns normalized arrays.
+    
     For each track:
       - Optionally shows an RGB composite row (if >=3 channels and ch is None)
       - Shows grayscale rows for each channel (or only `ch` if provided)
 
     Parameters
     ----------
-    data : xr.Dataset
+    ds : xr.Dataset
         Dataset containing a 'best_z' DataArray with dims like:
         (track_id, fov, t, y, x, ch) or (track_id, t, y, x, ch).
     fov : int, default 0
@@ -55,9 +59,7 @@ def plot_trackarray_crops(
         Mapping from track_id -> normalized DataArray used for plotting
         with dims (t, y, x, ch). If `ch` is provided, ch size = 1.
     """
-    import xarray as xr
-
-    if "best_z" not in data:
+    if "best_z" not in ds:
         raise KeyError("Dataset must contain a 'best_z' DataArray.")
 
     def _decorate_facetgrid(g, suptitle=None):
@@ -97,14 +99,14 @@ def plot_trackarray_crops(
     results = {}
 
     for tid in track_ids:
-        bz = data["best_z"].sel(track_id=tid)
+        bz = ds["best_z"].sel(track_id=tid)
 
         # --- FOV selection ---
         if "fov" in bz.dims:
             bz = bz.sel(fov=fov)
-        elif "fov" in data.coords:
+        elif "fov" in ds.coords:
             try:
-                bz = bz.where(data["fov"] == fov, drop=True)
+                bz = bz.where(ds["fov"] == fov, drop=True)
             except Exception:
                 pass
 

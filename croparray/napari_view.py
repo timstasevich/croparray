@@ -1,3 +1,4 @@
+__all__ = ["view_montage"]
 
 def view_montage(my_ca_montage):
     """

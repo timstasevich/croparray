@@ -5,7 +5,6 @@ from typing import Optional
 import numpy as np
 
 
-
 def display_cell_and_tracks(img_croparray, tracks_df):
     """
     Display the maximum intensity projection of the images and the tracks in Napari.

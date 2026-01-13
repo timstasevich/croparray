@@ -1,38 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union, Optional
-
+from typing import Union
 import xarray as xr
+
+from ..crop_array_object import CropArray
 
 
 @dataclass
-class TrackArray:
+class TrackArray(CropArray):
     """
-    Lightweight object wrapper around a track-array xarray.Dataset.
+    CropArray subclass for track-based datasets.
 
-    The underlying dataset is expected to have at least:
+    Expects ds to have:
       - dimension: track_id
       - dimension: t
     and often:
       - dimension: fov (length 1 per track)
       - optional dims: z, y, x, ch
     """
-    ds: xr.Dataset
 
     def __post_init__(self):
-        # --- validation ---
+        # Base initialization (attaches io/build/measure/plot/view/df/track/ops)
+        super().__post_init__()
+
+        # Track-specific validation (keep your current behavior)
         if not isinstance(self.ds, xr.Dataset):
             raise TypeError("TrackArray expects an xarray.Dataset")
         if "track_id" not in self.ds.dims:
             raise ValueError("TrackArray dataset must have a 'track_id' dimension")
 
-        # --- accessors (namespaced API) ---
+        # Track-specific accessors: DO NOT overwrite base .plot/.view/.df
         from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF
 
-        self.plot = TrackArrayPlot(self)
-        self.view = TrackArrayView(self)
-        self.df = TrackArrayDF(self)
+        self.tplot = TrackArrayPlot(self)
+        self.tview = TrackArrayView(self)
+        self.tdf = TrackArrayDF(self)
 
     def __repr__(self) -> str:
         sizes = self.ds.sizes
@@ -55,21 +58,7 @@ class TrackArray:
         return self.ds
 
     def _repr_html_(self) -> str:
-        # Jupyter/IPython rich display
         try:
             return self.ds._repr_html_()
         except Exception:
-            # Fall back to plain repr if something odd happens
             return f"<pre>{repr(self.ds)}</pre>"
-
-    def __getattr__(self, name):
-        """
-        Delegate attribute access to the underlying xarray.Dataset.
-        This makes ta.sel(...), ta.transpose(...), etc. work naturally.
-        """
-        return getattr(self.ds, name)
-
-    def __getitem__(self, key):
-        """Delegate ta['int'] etc. to the dataset."""
-        return self.ds[key]
-    
