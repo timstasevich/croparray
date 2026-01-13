@@ -77,32 +77,113 @@ def spot_detect_and_qc(img, minmass=6000, size=5):
         new_img[int(y_value), int(x_value)] = signal_value
     return new_img
 
+
 def binarize_crop_manual(
     img,
     *,
-    th1: float,
+    th1: float | None = None,
+    q: float | None = None,
+    q_range: tuple[float, float] | None = None,
+    q_positive_only: bool = True,
     max_dist_px: float | None = None,
     fill_holes: bool = False,
     close_px: int = 0,
     return_uint8: bool = True,
-    smooth_px: int - 1, # 0 = off, 1 = light rounding (recommended)
+    smooth_px: int = 1,  # 0 = off, 1 = light rounding (recommended)
 ):
     """
-    Fast single-threshold binarization:
-      - threshold (img >= th1)
-      - optional closing
-      - label components (8-connectivity)
-      - pick component with minimum distance to center (via ndimage.minimum)
+    Fast single-threshold binarization with optional automatic threshold selection.
+
+    Behavior
+    --------
+    1) Choose threshold:
+       - If `th1` is provided: use it.
+       - Else if `q` is provided: compute threshold from the image intensity distribution
+         (optionally restricted to positive pixels).
+       - Else: raise ValueError (must provide `th1` or `q`).
+
+    2) Threshold (img >= th1)
+    3) Optional closing
+    4) Label connected components (8-connectivity)
+    5) Keep the component closest to crop center (min distance^2)
+    6) Optional hole fill / optional smoothing
+
+    Parameters
+    ----------
+    img : array-like (2D)
+        Input crop image.
+    th1 : float | None
+        Explicit threshold. If provided, takes precedence.
+    q : float | None
+        Quantile in [0, 1] used to compute threshold from image values.
+        Example: q=0.90 means threshold at the 90th percentile (within the selected
+        value population; see `q_positive_only`).
+    q_range : tuple[float, float] | None
+        Optional “visual-style” rescaling range (like your plotting normalization).
+        If provided as (q_low, q_high), we compute v0=quantile(q_low) and v1=quantile(q_high),
+        then set th1 = v0 + q*(v1 - v0). This lets you treat `q` as a *fraction* of the
+        displayed dynamic range rather than a raw quantile.
+        - If set, `q` must be provided and is interpreted as a fraction in [0,1].
+    q_positive_only : bool
+        If True (recommended), compute quantiles using only pixels > 0.
+    max_dist_px : float | None
+        Reject the chosen component if its closest pixel is farther than this from center.
+    fill_holes : bool
+        If True, fill holes after selecting the center component.
+    close_px : int
+        Binary closing iterations.
+    return_uint8 : bool
+        If True, return uint8 mask (0/1). Else return bool mask.
+    smooth_px : int
+        Optional binary opening “rounding” size (0 disables).
+
+    Returns
+    -------
+    np.ndarray
+        Binary mask (uint8 or bool).
     """
     import numpy as np
     from scipy import ndimage as ndi
 
     img = np.asarray(img)
     if img.ndim != 2:
-        raise ValueError(f"binarize_crop_manual_fast expects 2D image, got {img.shape}")
+        raise ValueError(f"binarize_crop_manual expects 2D image, got {img.shape}")
+
+    # If already boolean-ish / binary, default thresholding is trivial unless user overrides.
+    # (Keeps behavior predictable when you pass masks back through this.)
+    if th1 is None and q is None:
+        raise ValueError("Provide either th1 (explicit threshold) or q (quantile threshold).")
+
+    # --- Choose threshold ---
+    if th1 is None:
+        if q is None:
+            raise ValueError("Provide either th1 or q.")
+        q = float(q)
+        if not (0.0 <= q <= 1.0):
+            raise ValueError(f"q must be in [0,1], got {q}")
+
+        vals = img
+        if q_positive_only:
+            vals = vals[vals > 0]
+
+        # If everything is 0 (or no positive pixels), fallback safely.
+        if vals.size == 0:
+            th1 = 1.0  # yields empty mask
+        else:
+            if q_range is None:
+                # Direct quantile threshold
+                th1 = float(np.quantile(vals, q))
+            else:
+                # "Displayed dynamic range" style: q is a fraction of [v0,v1]
+                ql, qh = q_range
+                v0 = float(np.quantile(vals, float(ql)))
+                v1 = float(np.quantile(vals, float(qh)))
+                th1 = v0 + q * (v1 - v0)
+
+    th1 = float(th1)
 
     # 1) Threshold
-    m = img >= float(th1)
+    m = img >= th1
 
     # 2) Optional closing
     if close_px and int(close_px) > 0:
@@ -116,13 +197,13 @@ def binarize_crop_manual(
         out = np.zeros_like(m, dtype=bool)
         return out.astype(np.uint8) if return_uint8 else out
 
-    # 4) Distance^2 map to crop center (computed once per call)
+    # 4) Distance^2 map to crop center
     H, W = img.shape
     sy, sx = H // 2, W // 2
     yy, xx = np.ogrid[:H, :W]
     d2 = (yy - sy) ** 2 + (xx - sx) ** 2
 
-    # 5) For each label, find the minimum d2 among its pixels (C-speed)
+    # 5) Minimum d2 per label (fast)
     labels = np.arange(1, nlab + 1, dtype=int)
     min_d2 = ndi.minimum(d2, labels=lab, index=labels)
 
@@ -138,17 +219,92 @@ def binarize_crop_manual(
 
     out = (lab == best_label)
 
-    if smooth_px and smooth_px > 0:
-        from scipy.ndimage import binary_opening
-        out = binary_opening(
+    # Optional smoothing / rounding
+    if smooth_px and int(smooth_px) > 0:
+        # (opening removes single-pixel spurs and rounds a bit)
+        out = ndi.binary_opening(
             out,
-            structure=np.ones((2 * smooth_px + 1, 2 * smooth_px + 1))
+            structure=np.ones((2 * int(smooth_px) + 1, 2 * int(smooth_px) + 1), dtype=bool),
         )
 
     if fill_holes:
         out = ndi.binary_fill_holes(out)
 
     return out.astype(np.uint8) if return_uint8 else out
+
+
+# def binarize_crop_manual(
+#     img,
+#     *,
+#     th1: float,
+#     max_dist_px: float | None = None,
+#     fill_holes: bool = False,
+#     close_px: int = 0,
+#     return_uint8: bool = True,
+#     smooth_px: int - 1, # 0 = off, 1 = light rounding (recommended)
+# ):
+#     """
+#     Fast single-threshold binarization:
+#       - threshold (img >= th1)
+#       - optional closing
+#       - label components (8-connectivity)
+#       - pick component with minimum distance to center (via ndimage.minimum)
+#     """
+#     import numpy as np
+#     from scipy import ndimage as ndi
+
+#     img = np.asarray(img)
+#     if img.ndim != 2:
+#         raise ValueError(f"binarize_crop_manual_fast expects 2D image, got {img.shape}")
+
+#     # 1) Threshold
+#     m = img >= float(th1)
+
+#     # 2) Optional closing
+#     if close_px and int(close_px) > 0:
+#         m = ndi.binary_closing(m, iterations=int(close_px))
+
+#     # 3) Label connected components (8-connectivity)
+#     structure = np.ones((3, 3), dtype=bool)
+#     lab, nlab = ndi.label(m, structure=structure)
+
+#     if nlab == 0:
+#         out = np.zeros_like(m, dtype=bool)
+#         return out.astype(np.uint8) if return_uint8 else out
+
+#     # 4) Distance^2 map to crop center (computed once per call)
+#     H, W = img.shape
+#     sy, sx = H // 2, W // 2
+#     yy, xx = np.ogrid[:H, :W]
+#     d2 = (yy - sy) ** 2 + (xx - sx) ** 2
+
+#     # 5) For each label, find the minimum d2 among its pixels (C-speed)
+#     labels = np.arange(1, nlab + 1, dtype=int)
+#     min_d2 = ndi.minimum(d2, labels=lab, index=labels)
+
+#     # 6) Choose best label
+#     best_idx = int(np.argmin(min_d2))
+#     best_label = int(labels[best_idx])
+#     best_d2 = float(min_d2[best_idx])
+
+#     # Optional distance rejection
+#     if max_dist_px is not None and (best_d2 ** 0.5) > float(max_dist_px):
+#         out = np.zeros_like(m, dtype=bool)
+#         return out.astype(np.uint8) if return_uint8 else out
+
+#     out = (lab == best_label)
+
+#     if smooth_px and smooth_px > 0:
+#         from scipy.ndimage import binary_opening
+#         out = binary_opening(
+#             out,
+#             structure=np.ones((2 * smooth_px + 1, 2 * smooth_px + 1))
+#         )
+
+#     if fill_holes:
+#         out = ndi.binary_fill_holes(out)
+
+#     return out.astype(np.uint8) if return_uint8 else out
 
 
 
