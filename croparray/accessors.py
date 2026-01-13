@@ -3,6 +3,45 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+import functools
+import importlib
+import inspect
+
+
+def delegate_ds(mod_path: str, func_name: str, *, drop_first_arg: bool = True):
+    """
+    Create an accessor method that forwards self.ds into the target function while
+    preserving docstring + signature for IDEs/Jupyter.
+
+    This avoids duplicating docstrings in accessors while still allowing call tips.
+    """
+
+    # Import at definition time so the resulting attribute is a real function on the class.
+    # NOTE: This can surface circular import issues if the target module imports accessors.
+    module = importlib.import_module(mod_path, package=__package__)
+    func = getattr(module, func_name)
+
+    @functools.wraps(func)  # copies __doc__, __name__, __module__, etc.
+    def method(self, *args, **kwargs):
+        return func(self.ds, *args, **kwargs)
+
+    # Make the signature match the underlying function but hide the injected ds argument.
+    try:
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+        if drop_first_arg and params:
+            params = params[1:]
+        method.__signature__ = inspect.Signature(
+            parameters=params,
+            return_annotation=sig.return_annotation,
+        )
+        # Some frontends look at this for displaying call tips
+        method.__text_signature__ = str(method.__signature__)
+    except Exception:
+        pass
+
+    return method
+
 
 @dataclass
 class _BaseAccessor:
@@ -31,8 +70,8 @@ class _BaseAccessor:
         -----
         - Delegation only triggers if normal attribute lookup fails.
         - Private names (starting with "_") are not delegated.
-        - For dataset-aware functions that require `ds`, you can still provide
-          explicit wrapper methods that pass `self.ds`.
+        - For dataset-aware public API methods where you want Jupyter call tips,
+          prefer defining explicit accessor methods via `delegate_ds(...)`.
         """
         if name.startswith("_"):
             raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
@@ -41,11 +80,7 @@ class _BaseAccessor:
         if not mod_path:
             raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
 
-        # Import lazily so edits + reloads are easier during development
-        import importlib
-
-        pkg = __package__  # e.g. "croparray"
-        module = importlib.import_module(mod_path, package=pkg)
+        module = importlib.import_module(mod_path, package=__package__)
 
         try:
             return getattr(module, name)
@@ -83,28 +118,11 @@ class CropArrayBuild(_BaseAccessor):
 class CropArrayMeasure(_BaseAccessor):
     _delegate_module: Optional[str] = ".measure"
 
-    def best_z_proj(self, *args, **kwargs):
-        from .measure import best_z_proj
-        return best_z_proj(self.ds, *args, **kwargs)
-
-    def signal(self, *args, **kwargs):
-        from .measure import measure_signal
-        return measure_signal(self.ds, *args, **kwargs)
-
-    def signal_raw(self, *args, **kwargs):
-        from .measure import measure_signal_raw
-        return measure_signal_raw(self.ds, *args, **kwargs)
-    
-    def mask_props(self, *args, **kwargs):
-        """
-        Compute scalar morphology measurements from a binary mask layer across the whole croparray.
-
-        Typical use:
-            ca3.ds = ca3.measure.mask_props(source="ch0_mask_manual",
-                                           props=("area_px","eccentricity","solidity"))
-        """
-        from .measure import measure_mask_props
-        return measure_mask_props(self.ds, *args, **kwargs)
+    # Public API: preserve docstring + signature from underlying functions
+    best_z_proj = delegate_ds(".measure", "best_z_proj")
+    signal = delegate_ds(".measure", "measure_signal")
+    signal_raw = delegate_ds(".measure", "measure_signal_raw")
+    mask_props = delegate_ds(".measure", "measure_mask_props")
 
 
 @dataclass
@@ -135,9 +153,7 @@ class CropArrayOps(_BaseAccessor):
 class CropArrayPlot(_BaseAccessor):
     _delegate_module: Optional[str] = ".plot"
 
-    def montage(self, *args, **kwargs):
-        from .plot import montage
-        return montage(self.ds, *args, **kwargs)
+    montage = delegate_ds(".plot", "montage")
 
 
 @dataclass
@@ -153,9 +169,7 @@ class CropArrayView(_BaseAccessor):
 class CropArrayDF(_BaseAccessor):
     _delegate_module: Optional[str] = ".dataframe"
 
-    def variables(self, var_names, *args, **kwargs):
-        from .dataframe import variables_to_df
-        return variables_to_df(self.ds, var_names, *args, **kwargs)
+    variables = delegate_ds(".dataframe", "variables_to_df")
 
 
 @dataclass
@@ -180,16 +194,10 @@ class TrackArrayPlot(_BaseAccessor):
     Wraps functions implemented in croparray/trackarray/plot.py.
     """
 
-    # Optional: keep for future generic delegation if you want it later
     _delegate_module: Optional[str] = ".trackarray.plot"
 
-    def plot_trackarray_crops(self, *args, **kwargs):
-        from .trackarray.plot import plot_trackarray_crops
-        return plot_trackarray_crops(self.ds, *args, **kwargs)
-
-    def plot_track_signal_traces(self, *args, **kwargs):
-        from .trackarray.plot import plot_track_signal_traces
-        return plot_track_signal_traces(self.ds, *args, **kwargs)
+    plot_trackarray_crops = delegate_ds(".trackarray.plot", "plot_trackarray_crops")
+    plot_track_signal_traces = delegate_ds(".trackarray.plot", "plot_track_signal_traces")
 
 
 @dataclass
@@ -203,6 +211,4 @@ class TrackArrayView(_BaseAccessor):
 class TrackArrayDF(_BaseAccessor):
     _delegate_module: Optional[str] = ".dataframe"
 
-    def variables(self, var_names, *args, **kwargs):
-        from .dataframe import variables_to_df
-        return variables_to_df(self.ds, var_names, *args, **kwargs)
+    variables = delegate_ds(".dataframe", "variables_to_df")
