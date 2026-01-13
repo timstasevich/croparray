@@ -9,6 +9,8 @@ __all__ = ["plot_trackarray_crops","plot_track_signal_traces"]
 
 def plot_trackarray_crops(
     ds,
+    *,
+    layer: str = "best_z",
     fov=0,
     track_id=1,
     t=(0, 10, 3),
@@ -21,28 +23,27 @@ def plot_trackarray_crops(
 ):
     """
     Plot track-centered image crops across time and channels using xarray.plot.imshow.
-    
+
     Shows optional RGB composites and per-channel grayscale panels; returns normalized arrays.
-    
-    For each track:
-      - Optionally shows an RGB composite row (if >=3 channels and ch is None)
-      - Shows grayscale rows for each channel (or only `ch` if provided)
 
     Parameters
     ----------
     ds : xr.Dataset
-        Dataset containing a 'best_z' DataArray with dims like:
-        (track_id, fov, t, y, x, ch) or (track_id, t, y, x, ch).
+        Trackarray dataset.
+    layer : str, default "best_z"
+        Name of the DataArray in `ds` to plot (e.g., "best_z", "raw", "ch0_mask_manual").
+        Must be image-like with dims including (track_id, t, y, x) and optionally (fov, ch).
     fov : int, default 0
         Field of view to select, if applicable.
     track_id : int or sequence[int], default 1
-        Track(s) to plot. One grid per track.
+        Track(s) to plot.
     t : tuple[int, int, int], default (0, 10, 3)
         (start, stop, step) along time axis.
     rolling : int, default 1
         Rolling mean window over time. If 1, no smoothing.
     quantile_range : tuple[float, float], default (0.02, 0.99)
         Quantiles used for per-channel normalization (positive pixels only).
+        Ignored for binary-like masks (0/1 or bool), which are displayed as black/white.
     rgb_channels : tuple, default (0, 1, 2)
         Channels to use for RGB composite when available.
         Duplicates are allowed (e.g. (1, 1, 2)).
@@ -56,16 +57,25 @@ def plot_trackarray_crops(
     Returns
     -------
     dict[int, xr.DataArray]
-        Mapping from track_id -> normalized DataArray used for plotting
-        with dims (t, y, x, ch). If `ch` is provided, ch size = 1.
+        Mapping from track_id -> normalized DataArray used for plotting with dims (t, y, x, ch)
+        when ch exists. If the selected layer has no 'ch' dim, the returned arrays have
+        dims (t, y, x).
     """
-    if "best_z" not in ds:
-        raise KeyError("Dataset must contain a 'best_z' DataArray.")
+    import numpy as np
+    import xarray as xr
+
+    if layer not in ds:
+        raise KeyError(f"Dataset must contain layer {layer!r}. Available: {list(ds.data_vars)}")
+
+    da = ds[layer]
+
+    # Minimal sanity check for image-like content
+    for req in ("t", "y", "x"):
+        if req not in da.dims:
+            raise ValueError(f"Layer {layer!r} must have dim {req!r}. Found dims: {da.dims}")
 
     def _decorate_facetgrid(g, suptitle=None):
-        """Optionally suppress per-panel labels and add a figure-level title."""
         if suppress_labels:
-            # Remove facet titles (e.g. t=0, t=3, ...)
             try:
                 g.set_titles("")
             except Exception:
@@ -73,8 +83,6 @@ def plot_trackarray_crops(
                     g.set_titles(template="")
                 except Exception:
                     pass
-
-            # Remove axis labels
             try:
                 g.set_xlabels("")
                 g.set_ylabels("")
@@ -86,20 +94,56 @@ def plot_trackarray_crops(
                 g.fig.suptitle(suptitle, y=1.02)
             except Exception:
                 pass
-
         return g
 
-    track_ids = (
-        list(track_id)
-        if isinstance(track_id, (list, tuple, np.ndarray))
-        else [track_id]
-    )
-
     eps = 1e-6
+
+    def _is_binary_like(a: xr.DataArray, max_check: int = 1_000_000) -> bool:
+        """Heuristic: True if values look like a binary mask (bool or subset of {0,1,255})."""
+        if a.dtype == bool:
+            return True
+
+        arr = np.asarray(a.data) if hasattr(a, "data") else np.asarray(a.values)
+        flat = arr.ravel()
+        if flat.size == 0:
+            return False
+
+        if flat.size > max_check:
+            step = int(np.ceil(flat.size / max_check))
+            flat = flat[::step]
+
+        if np.issubdtype(flat.dtype, np.floating):
+            flat = flat[~np.isnan(flat)]
+            if flat.size == 0:
+                return False
+
+        u = np.unique(flat)
+        return set(u.tolist()).issubset({0, 1, 255})
+
+    def _normalize_for_display(a: xr.DataArray):
+        """
+        Returns (normed, vmin, vmax). For binary-like arrays, return black/white mask.
+        Otherwise, quantile-normalize using positive pixels only.
+        """
+        if _is_binary_like(a):
+            out = a.astype(float)
+            out = xr.where(out == 255, 1.0, out).clip(0, 1)
+            return out, 0.0, 1.0
+
+        da_pos = a.where(lambda x: x > 0)
+        if da_pos.count() == 0:
+            q0, q1 = 0.0, 1.0
+        else:
+            q0 = da_pos.quantile(quantile_range[0])
+            q1 = da_pos.quantile(quantile_range[1])
+        out = ((a - q0) / (q1 - q0 + eps)).clip(0, 1)
+        return out, 0.0, 1.0
+
+    track_ids = list(track_id) if isinstance(track_id, (list, tuple, np.ndarray)) else [track_id]
     results = {}
 
     for tid in track_ids:
-        bz = ds["best_z"].sel(track_id=tid)
+        bz = da.sel(track_id=tid) if "track_id" in da.dims else da
 
         # --- FOV selection ---
         if "fov" in bz.dims:
@@ -118,6 +162,27 @@ def plot_trackarray_crops(
         if rolling and rolling > 1:
             bz = bz.rolling(t=rolling, center=True, min_periods=1).mean()
 
+        # If the layer has no channel dimension, just plot it as grayscale
+        if "ch" not in bz.dims:
+            normed, vmin, vmax = _normalize_for_display(bz)
+
+            g = normed.plot.imshow(
+                col="t",
+                cmap="gray",
+                xticks=[] if suppress_labels else None,
+                yticks=[] if suppress_labels else None,
+                aspect=1,
+                size=5,
+                vmin=vmin,
+                vmax=vmax,
+                robust=False,
+                add_labels=not suppress_labels,
+                add_colorbar=False,
+            )
+            _decorate_facetgrid(g, suptitle=f"track_id={tid} | {layer}")
+            results[int(tid)] = normed
+            continue
+
         # --- Single-channel mode ---
         if ch is not None:
             try:
@@ -127,15 +192,8 @@ def plot_trackarray_crops(
 
             bz1 = bz1.expand_dims("ch").assign_coords(ch=[ch])
 
-            da_pos = bz1.isel(ch=0).where(lambda x: x > 0)
-            q0 = da_pos.quantile(quantile_range[0])
-            q1 = da_pos.quantile(quantile_range[1])
-
-            normed = (
-                ((bz1.isel(ch=0) - q0) / (q1 - q0 + eps))
-                .clip(0, 1)
-                .expand_dims(ch=[ch])
-            )
+            normed0, vmin, vmax = _normalize_for_display(bz1.isel(ch=0))
+            normed = normed0.expand_dims(ch=[ch])
 
             g = normed.isel(ch=0).plot.imshow(
                 col="t",
@@ -144,26 +202,21 @@ def plot_trackarray_crops(
                 yticks=[] if suppress_labels else None,
                 aspect=1,
                 size=5,
-                vmin=0,
-                vmax=1,
-                robust=True,
+                vmin=vmin,
+                vmax=vmax,
+                robust=False,
                 add_labels=not suppress_labels,
                 add_colorbar=False,
             )
-            _decorate_facetgrid(g, suptitle=f"track_id={tid} | ch={ch}")
-
+            _decorate_facetgrid(g, suptitle=f"track_id={tid} | {layer} | ch={ch}")
             results[int(tid)] = normed
             continue
 
         # --- Per-channel normalization ---
         ch_normed = []
         for ch_val in bz["ch"].values:
-            da_pos = bz.sel(ch=ch_val).where(lambda x: x > 0)
-            q0 = da_pos.quantile(quantile_range[0])
-            q1 = da_pos.quantile(quantile_range[1])
-            ch_normed.append(
-                ((bz.sel(ch=ch_val) - q0) / (q1 - q0 + eps)).clip(0, 1)
-            )
+            n, _, _ = _normalize_for_display(bz.sel(ch=ch_val))
+            ch_normed.append(n)
 
         normed = xr.concat(ch_normed, dim="ch").assign_coords(ch=bz["ch"].values)
 
@@ -187,7 +240,7 @@ def plot_trackarray_crops(
                     add_labels=not suppress_labels,
                     add_colorbar=False,
                 )
-                _decorate_facetgrid(g, suptitle=f"track_id={tid} (RGB)")
+                _decorate_facetgrid(g, suptitle=f"track_id={tid} | {layer} (RGB)")
 
         # --- Grayscale rows ---
         for ch_val in normed["ch"].values:
@@ -200,11 +253,11 @@ def plot_trackarray_crops(
                 size=5,
                 vmin=0,
                 vmax=1,
-                robust=True,
+                robust=False,
                 add_labels=not suppress_labels,
                 add_colorbar=False,
             )
-            _decorate_facetgrid(g, suptitle=f"track_id={tid}, ch={ch_val}")
+            _decorate_facetgrid(g, suptitle=f"track_id={tid} | {layer} | ch={ch_val}")
 
         results[int(tid)] = normed
 
@@ -236,19 +289,27 @@ def plot_track_signal_traces(
     Plot per-track traces for a chosen variable (default: 'signal') in a subplot grid.
     Optionally place one channel on a secondary (right) y-axis.
 
+    Works for both channelled variables (dims include 'ch') and channel-less variables
+    (dims do not include 'ch', or dataframe has no usable 'ch' column).
+
     Parameters
     ----------
     ta_dataset : xarray.Dataset
-        TrackArray dataset containing `var` with dims including (track_id, t) and usually (ch).
+        TrackArray dataset containing `var` with dims including (track_id, t) and optionally (ch).
     track_ids : list[int]
         Track IDs to plot.
     var : str, default "signal"
         Variable name to plot (e.g. "signal", "signal_raw", "ID", "MEAN_INTENSITY").
     rgb : tuple[int,int,int] or None, default (1,1,1)
         Channel inclusion mask for left axis (unless a channel is assigned to y2).
-        If None, plot all channels.
+        If None, plot all channels. Ignored for channel-less variables.
     colors, markers, marker_size, scatter_size, markevery, figsize, ylim, xlim, col_wrap, y2, y2lim, y2_label,
-    legend_loc, show_legend : see previous docstring.
+    legend_loc, show_legend : as before.
+
+    Notes
+    -----
+    - For channel-less variables, the trace is plotted once per track (no channel loop),
+      using colors[0]/markers[0], and y2 is ignored.
     """
     from ..dataframe import variables_to_df
     import math
@@ -259,6 +320,9 @@ def plot_track_signal_traces(
         raise KeyError(f"Dataset does not contain variable '{var}'")
 
     df = variables_to_df(ta_dataset, [var])
+
+    # Determine whether this variable is actually channelled in the dataframe.
+    has_ch = ("ch" in df.columns) and df["ch"].notna().any()
 
     sns.set_style("whitegrid")
     sns.set(font_scale=1.1)
@@ -288,66 +352,103 @@ def plot_track_signal_traces(
     for idx, track_id in enumerate(track_ids):
         row, col = divmod(idx, col_wrap)
         ax = axes[row][col]
-        ax2 = ax.twinx() if y2 is not None else None
 
-        for ch in range(len(colors)):
-            if not (_rgb_on(ch) or (y2 == ch)):
-                continue
+        # Only meaningful for channelled vars
+        ax2 = ax.twinx() if (has_ch and y2 is not None) else None
 
-            color = colors[ch]
-            marker = markers[ch]
+        if not has_ch:
+            # ---- Channel-less variable: plot a single trace ----
+            subset = df[df["track_id"] == track_id]
+            if not subset.empty:
+                color0 = colors[0] if len(colors) else None
+                marker0 = markers[0] if len(markers) else "o"
 
-            subset = df[(df["track_id"] == track_id) & (df["ch"] == ch)]
-            if subset.empty:
-                continue
+                sns.lineplot(
+                    data=subset,
+                    x="t",
+                    y=var,
+                    ax=ax,
+                    color=color0,
+                    lw=2,
+                    dashes=False,
+                    legend=False,
+                    marker=marker0,
+                    markersize=marker_size,
+                    markevery=markevery,
+                )
 
-            target_ax = ax2 if (y2 is not None and ch == y2) else ax
+                # Scatter of the (possibly already-unique) timepoints
+                mean_df = subset.groupby("t")[var].mean().reset_index()
+                sns.scatterplot(
+                    data=mean_df,
+                    x="t",
+                    y=var,
+                    ax=ax,
+                    color=color0,
+                    s=scatter_size,
+                    legend=False,
+                )
 
-            sns.lineplot(
-                data=subset,
-                x="t",
-                y=var,
-                ax=target_ax,
-                color=color,
-                label=f"ch {ch}",
-                lw=2,
-                dashes=False,
-                legend=False,
-                marker=marker,
-                markersize=marker_size,
-                markevery=markevery,
-            )
+        else:
+            # ---- Channelled variable: loop channels as before ----
+            for ch in range(len(colors)):
+                if not (_rgb_on(ch) or (y2 == ch)):
+                    continue
 
-            mean_df = subset.groupby("t")[var].mean().reset_index()
-            sns.scatterplot(
-                data=mean_df,
-                x="t",
-                y=var,
-                ax=target_ax,
-                color=color,
-                s=scatter_size,
-                legend=False,
-            )
+                color = colors[ch]
+                marker = markers[ch]
+
+                subset = df[(df["track_id"] == track_id) & (df["ch"] == ch)]
+                if subset.empty:
+                    continue
+
+                target_ax = ax2 if (ax2 is not None and ch == y2) else ax
+
+                sns.lineplot(
+                    data=subset,
+                    x="t",
+                    y=var,
+                    ax=target_ax,
+                    color=color,
+                    label=f"ch {ch}",
+                    lw=2,
+                    dashes=False,
+                    legend=False,
+                    marker=marker,
+                    markersize=marker_size,
+                    markevery=markevery,
+                )
+
+                mean_df = subset.groupby("t")[var].mean().reset_index()
+                sns.scatterplot(
+                    data=mean_df,
+                    x="t",
+                    y=var,
+                    ax=target_ax,
+                    color=color,
+                    s=scatter_size,
+                    legend=False,
+                )
 
         ax.set_title(f"Track {int(track_id)}")
         ax.set_xlabel("time (sec)")
         ax.set_ylabel(f"{var} (a.u.)")
-        if ylim:
+        if ylim is not None:
             ax.set_ylim(ylim)
-        if xlim:
+        if xlim is not None:
             ax.set_xlim(xlim)
 
         if ax2 is not None:
             right_color = colors[y2 % len(colors)]
             ax2.set_ylabel(y2_label or f"{var} (a.u.) [ch {y2}]", color=right_color)
-            if y2lim:
+            if y2lim is not None:
                 ax2.set_ylim(y2lim)
-            if xlim:
+            if xlim is not None:
                 ax2.set_xlim(xlim)
             ax2.tick_params(axis="y", colors=right_color)
             ax2.spines["right"].set_color(right_color)
 
-        if show_legend:
+        if show_legend and has_ch:
             h1, l1 = ax.get_legend_handles_labels()
             h2, l2 = (ax2.get_legend_handles_labels() if ax2 else ([], []))
             handles, labels = h1 + h2, l1 + l2
@@ -377,3 +478,4 @@ def plot_track_signal_traces(
 
     plt.tight_layout()
     plt.show()
+

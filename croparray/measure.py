@@ -3,7 +3,7 @@ import xarray as xr
 from scipy import ndimage as ndi
 from skimage.measure import label, regionprops
 
-__all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "measure_mask_props"]
+__all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props"]
 
 def best_z_proj(ca, **kwargs):
     '''
@@ -163,7 +163,7 @@ def measure_signal_raw(ca, **kwargs):
 
 
 
-def measure_mask_props(
+def mask_props(
     ca,
     *,
     source: str,
