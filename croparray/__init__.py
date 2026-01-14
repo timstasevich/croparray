@@ -10,6 +10,7 @@ __version__ = "0.0.9"
 
 # Object-oriented API
 from .crop_array_object import CropArray
+from .crop_array_tools import concat
 
 
 # Functional / tools API (explicitly attached)

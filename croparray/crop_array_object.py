@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 import xarray as xr
-
+from typing import Sequence
 from .tracking import to_track_array as _to_track_array
 
 
@@ -145,3 +145,65 @@ class CropArray:
             search_range=search_range,
             memory=memory,
         )
+    
+    @classmethod
+    def concat(
+        cls,
+        cas: Sequence["CropArray"],
+        *,
+        dim: str = "Exp",
+        labels: Sequence[str] | None = None,
+        start_index: int = 1,
+        join: str = "exact",
+        compat: str = "equals",
+        coords: str = "minimal",
+        combine_attrs: str = "override",
+    ) -> "CropArray":
+        """
+        Concatenate multiple CropArray objects along a new (or existing) dimension.
+
+        Parameters
+        ----------
+        cas
+            Sequence of CropArray objects to concatenate.
+        dim
+            Name of the concatenation dimension. Default "Exp". Common alternatives: "Rep".
+        labels
+            Coordinate values for `dim`. Must have length == len(cas).
+            If None, labels are auto-generated as [f"{dim}{i}", ...] with i starting at start_index.
+            Example: dim="Exp" -> ["Exp1","Exp2",...], dim="Rep" -> ["Rep1","Rep2",...].
+        start_index
+            Starting index for auto-generated labels (default 1).
+        join, compat, coords, combine_attrs
+            Passed to xarray.concat. Defaults are conservative ("exact", "equals") to fail fast on mismatch.
+
+        Returns
+        -------
+        CropArray
+            New CropArray with concatenated dataset and coordinate named `dim`.
+        """
+        if not cas:
+            raise ValueError("cas must contain at least one CropArray.")
+
+        if labels is None:
+            labels = [f"{dim}{i}" for i in range(start_index, start_index + len(cas))]
+
+        if len(labels) != len(cas):
+            raise ValueError(
+                f"labels length ({len(labels)}) must match number of CropArrays ({len(cas)})."
+            )
+
+        ds_list = [ca.ds for ca in cas]
+        dim_coord = xr.DataArray(list(labels), dims=(dim,), name=dim)
+
+        ds_out = xr.concat(
+            ds_list,
+            dim=dim_coord,
+            join=join,
+            compat=compat,
+            coords=coords,
+            combine_attrs=combine_attrs,
+        )
+
+        return cls(ds_out)
+

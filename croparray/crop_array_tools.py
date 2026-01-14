@@ -11,19 +11,19 @@ Authors: Tim Stasevich & Luis Aguilera.
 # ExceptionName, function_name, GLOBAL_CONSTANT_NAME,
 # global_var_name, instance_var_name, function_parameter_name, local_var_name.
 
-import_libraries = 1
-if import_libraries == 1:
-    import numpy as np 
-    import pandas as pd
-    import xarray as xr
-    from scipy.ndimage import gaussian_filter1d
-#    import trackpy as tp
-    import matplotlib.pyplot as plt 
-    from matplotlib import gridspec
-#    import napari
-#    import seaborn as sns
-    import math
-    # from napari.utils import nbscreenshot
+from __future__ import annotations  
+
+import numpy as np
+import pandas as pd
+import xarray as xr
+from scipy.ndimage import gaussian_filter1d
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+import math
+import inspect
+from typing import Sequence
+
+from .crop_array_object import CropArray
 
 from .io import open_croparray, open_croparray_zarr
 from .build import _create_crop_array_dataset, create_crop_array
@@ -58,7 +58,31 @@ def print_banner():
         "                                     by : Luis Aguilera and Tim Stasevich \n\n"        )
 
 
+def concat(
+    *,
+    cas: Sequence[CropArray],
+    dim: str = "Exp",
+    labels: Sequence[str] | None = None,
+    start_index: int = 1,
+    join: str = "exact",
+    compat: str = "equals",
+    coords: str = "minimal",
+    combine_attrs: str = "override",
+) -> CropArray:
+    """Package-level wrapper for :meth:`CropArray.concat`."""
+    return CropArray.concat(
+        cas,
+        dim=dim,
+        labels=labels,
+        start_index=start_index,
+        join=join,
+        compat=compat,
+        coords=coords,
+        combine_attrs=combine_attrs,
+    )
 
-
+# Keep top-level wrapper docs/signature in sync with the canonical classmethod
+concat.__doc__ = CropArray.concat.__doc__
+concat.__signature__ = inspect.signature(CropArray.concat)
 
 
