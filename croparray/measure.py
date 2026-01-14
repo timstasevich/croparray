@@ -3,7 +3,7 @@ import xarray as xr
 from scipy import ndimage as ndi
 from skimage.measure import label, regionprops
 
-__all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props"]
+__all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props", "mask_skeleton_length"]
 
 def best_z_proj(ca, **kwargs):
     '''
@@ -261,4 +261,198 @@ def mask_props(
         ca[name].attrs["source_layer"] = source
         ca[name].attrs["long_name"] = f"{k} from {source}"
 
+    return ca
+
+
+def mask_skeleton_length(
+    ca,
+    *,
+    source: str,
+    out_prefix: str | None = None,
+    method: str = "longest_path",  # "longest_path" (head-to-tail) or "total"
+    connectivity: int = 2,         # 1=4-neigh, 2=8-neigh
+    empty_value: float = np.nan,
+):
+    """
+    Compute a skeleton-based length (in pixels) from a binary mask layer across the entire
+    crop array and add a scalar measurement layer back onto `ca`.
+
+    This is designed for "comet-like" objects where you want a robust head-to-tail length.
+
+    Parameters
+    ----------
+    ca : CropArray-like
+        Object containing xarray DataArrays in `ca[data_var_name]` and supporting assignment
+        `ca[new_name] = xr.DataArray(...)`.
+    source : str
+        Name of the binary mask layer. Must have at least 2D (y,x) as its last two dims.
+        Nonzero values are treated as True.
+    out_prefix : str | None
+        Prefix for output layer name(s). If None, uses `source`.
+    method : {"longest_path","total"}
+        - "longest_path": longest geodesic path along the skeleton graph (recommended for head-to-tail).
+        - "total": total skeleton length (sum of unique skeleton edges).
+    connectivity : {1,2}
+        1 uses 4-neighborhood (up/down/left/right). 2 uses 8-neighborhood (also diagonals).
+    empty_value : float
+        Value used when the mask is empty (no True pixels), or skeletonization yields no nodes.
+
+    Outputs
+    -------
+    Adds one scalar layer to `ca`:
+      - f"{out_prefix}__skeleton_longest_path_px" if method=="longest_path"
+      - f"{out_prefix}__skeleton_total_length_px" if method=="total"
+
+    Notes
+    -----
+    - "longest_path" is generally the best proxy for head-to-tail length for curved tails.
+    - If the skeleton has no endpoints (e.g., a loop), "longest_path" falls back to a
+      two-pass Dijkstra diameter estimate on the skeleton graph.
+    """
+    import heapq
+    import numpy as np
+    import xarray as xr
+    from scipy import ndimage as ndi
+    from skimage.morphology import skeletonize
+
+    if source not in ca:
+        raise KeyError(f"source='{source}' not found. Available: {list(ca.data_vars)}")
+
+    if method not in ("longest_path", "total"):
+        raise ValueError("method must be 'longest_path' or 'total'")
+
+    if connectivity not in (1, 2):
+        raise ValueError("connectivity must be 1 (4-neigh) or 2 (8-neigh)")
+
+    out_prefix = out_prefix or source
+
+    da = ca[source]
+    if da.ndim < 2:
+        raise ValueError(f"Mask layer '{source}' must be at least 2D (y,x). Got dims={da.dims}")
+
+    # Convention: last two dims are spatial
+    ydim, xdim = da.dims[-2], da.dims[-1]
+    lead_dims = da.dims[:-2]
+    lead_shape = da.shape[:-2]
+    H, W = da.shape[-2], da.shape[-1]
+
+    arr = np.asarray(da.data).astype(bool).reshape((-1, H, W))
+    N = arr.shape[0]
+
+    # Neighbor offsets
+    if connectivity == 1:
+        nbrs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    else:
+        nbrs = [(-1, 0), (1, 0), (0, -1), (0, 1),
+                (-1, -1), (-1, 1), (1, -1), (1, 1)]
+
+    def _edge_weight(dy: int, dx: int) -> float:
+        return 1.0 if (dy == 0 or dx == 0) else float(np.sqrt(2.0))
+
+    def _build_graph(skel: np.ndarray):
+        """Return (coords, index_map, adj) for skeleton pixels."""
+        coords = np.column_stack(np.nonzero(skel))  # (M,2) y,x
+        M = coords.shape[0]
+        if M == 0:
+            return coords, None, None
+
+        idx_map = -np.ones((H, W), dtype=int)
+        for i, (yy, xx) in enumerate(coords):
+            idx_map[yy, xx] = i
+
+        adj = [[] for _ in range(M)]
+        for i, (yy, xx) in enumerate(coords):
+            for dy, dx in nbrs:
+                y2, x2 = yy + dy, xx + dx
+                if 0 <= y2 < H and 0 <= x2 < W:
+                    j = idx_map[y2, x2]
+                    if j >= 0:
+                        w = _edge_weight(dy, dx)
+                        adj[i].append((j, w))
+        return coords, idx_map, adj
+
+    def _dijkstra(adj, start: int):
+        """Return dist array from start over weighted graph."""
+        M = len(adj)
+        dist = np.full(M, np.inf, dtype=float)
+        dist[start] = 0.0
+        pq = [(0.0, start)]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if d != dist[u]:
+                continue
+            for v, w in adj[u]:
+                nd = d + w
+                if nd < dist[v]:
+                    dist[v] = nd
+                    heapq.heappush(pq, (nd, v))
+        return dist
+
+    def _total_length(adj):
+        """Sum unique edges once (i<j)."""
+        total = 0.0
+        seen = set()
+        for i, nbr_list in enumerate(adj):
+            for j, w in nbr_list:
+                if i == j:
+                    continue
+                a, b = (i, j) if i < j else (j, i)
+                if (a, b) not in seen:
+                    seen.add((a, b))
+                    total += w
+        return total
+
+    out = np.full(N, empty_value, dtype=float)
+
+    for i in range(N):
+        m = arr[i]
+        if not m.any():
+            continue
+
+        skel = skeletonize(m)
+        coords, idx_map, adj = _build_graph(skel)
+        if adj is None:
+            continue
+
+        if method == "total":
+            out[i] = float(_total_length(adj))
+            continue
+
+        # method == "longest_path"
+        # Compute degrees and endpoints
+        deg = np.array([len(nbrs_i) for nbrs_i in adj], dtype=int)
+        endpoints = np.where(deg == 1)[0]
+
+        if endpoints.size >= 2:
+            # Exact longest shortest-path over endpoints (small graphs; safe to brute force)
+            best = 0.0
+            for s in endpoints:
+                dist = _dijkstra(adj, int(s))
+                # Consider only endpoints
+                dmax = np.max(dist[endpoints])
+                if np.isfinite(dmax) and dmax > best:
+                    best = float(dmax)
+            out[i] = best
+        else:
+            # No endpoints (loop) or single endpoint (degenerate):
+            # approximate diameter with 2-pass Dijkstra (exact for trees; good fallback here)
+            dist0 = _dijkstra(adj, 0)
+            a = int(np.argmax(dist0))
+            dista = _dijkstra(adj, a)
+            diam = float(np.max(dista))
+            out[i] = diam
+
+    # Write back to ca
+    if method == "total":
+        out_name = f"{out_prefix}__skeleton_total_length_px"
+    else:
+        out_name = f"{out_prefix}__skeleton_longest_path_px"
+
+    da_out = xr.DataArray(
+        out.reshape(lead_shape),
+        dims=lead_dims,
+        coords={d: da.coords[d] for d in lead_dims},
+        name=out_name,
+    )
+    ca[out_name] = da_out
     return ca

@@ -29,6 +29,7 @@ from croparray.measure import best_z_proj as _impl_CropArrayMeasure_best_z_proj
 from croparray.measure import measure_signal as _impl_CropArrayMeasure_measure_signal
 from croparray.measure import measure_signal_raw as _impl_CropArrayMeasure_measure_signal_raw
 from croparray.measure import mask_props as _impl_CropArrayMeasure_mask_props
+from croparray.measure import mask_skeleton_length as _impl_CropArrayMeasure_mask_skeleton_length
 
 @dataclass
 class CropArrayMeasure(_BaseAccessor):
@@ -45,11 +46,15 @@ class CropArrayMeasure(_BaseAccessor):
     def mask_props(self, source, out_prefix=None, props=('area_px', 'eccentricity', 'solidity', 'perimeter_px', 'centroid_y_px', 'centroid_x_px'), connectivity=2, empty_value=float("nan")):
         return _impl_CropArrayMeasure_mask_props(self.ds, source=source, out_prefix=out_prefix, props=props, connectivity=connectivity, empty_value=empty_value)
 
+    def mask_skeleton_length(self, source, out_prefix=None, method='longest_path', connectivity=2, empty_value=float("nan")):
+        return _impl_CropArrayMeasure_mask_skeleton_length(self.ds, source=source, out_prefix=out_prefix, method=method, connectivity=connectivity, empty_value=empty_value)
+
 
 CropArrayMeasure.best_z_proj.__doc__ = _impl_CropArrayMeasure_best_z_proj.__doc__
 CropArrayMeasure.measure_signal.__doc__ = _impl_CropArrayMeasure_measure_signal.__doc__
 CropArrayMeasure.measure_signal_raw.__doc__ = _impl_CropArrayMeasure_measure_signal_raw.__doc__
 CropArrayMeasure.mask_props.__doc__ = _impl_CropArrayMeasure_mask_props.__doc__
+CropArrayMeasure.mask_skeleton_length.__doc__ = _impl_CropArrayMeasure_mask_skeleton_length.__doc__
 
 
 from croparray.dataframe import variables_to_df as _impl_CropArrayDF_variables_to_df
