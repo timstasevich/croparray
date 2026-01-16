@@ -36,7 +36,7 @@ from .tracking import (
     to_track_array,
 )
 from .trackarray.plot import plot_trackarray_crops, plot_track_signal_traces
-from .trackarray.build import track_array
+from .trackarray.build import track_array,track_array_single
 from .trackarray.dataframe import create_tracks_df, track_signals_to_df
 from .trackarray.napari_view import display_cell_and_tracks
 from .crop_ops.measure import spot_detect_and_qc, binarize_crop, binarize_crop_manual
