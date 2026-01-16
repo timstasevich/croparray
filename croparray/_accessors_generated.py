@@ -92,20 +92,27 @@ from croparray.trackarray.plot import plot_track_signal_traces as _impl_TrackArr
 @dataclass
 class TrackArrayPlot(_BaseAccessor):
     """Generated accessor methods."""
-    def plot_trackarray_crops(self, layer='best_z', fov=0, track_id=1, t=(0, 10, 3), rolling=1, quantile_range=(0.02, 0.99), rgb_channels=(0, 1, 2), ch=None, suppress_labels=True, show_suptitle=True):
-        return _impl_TrackArrayPlot_plot_trackarray_crops(self.ds, layer=layer, fov=fov, track_id=track_id, t=t, rolling=rolling, quantile_range=quantile_range, rgb_channels=rgb_channels, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
+    def plot_trackarray_crops(self, layer='best_z', fov=0, track_ids=(1,), t=(0, 10, 3), rolling=1, quantile_range=(0.02, 0.99), show_grayscale=True, show_merge_chs=None, ch=None, suppress_labels=True, show_suptitle=True):
+        return _impl_TrackArrayPlot_plot_trackarray_crops(self.ds, layer=layer, fov=fov, track_ids=track_ids, t=t, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
     def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, legend_loc='upper right', show_legend=True):
-        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var, rgb, colors, markers, marker_size, scatter_size, markevery, figsize, ylim, xlim, col_wrap, y2, y2lim, y2_label, legend_loc, show_legend)
+        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, legend_loc=legend_loc, show_legend=show_legend)
 
 
 TrackArrayPlot.plot_trackarray_crops.__doc__ = _impl_TrackArrayPlot_plot_trackarray_crops.__doc__
 TrackArrayPlot.plot_track_signal_traces.__doc__ = _impl_TrackArrayPlot_plot_track_signal_traces.__doc__
 
 
+from croparray.trackarray.measure import tracklist as _impl_TrackArrayMeasure_tracklist
+
 @dataclass
 class TrackArrayMeasure(_BaseAccessor):
     """Generated accessor methods."""
+    def tracklist(self, var=None, min_count=1, return_mask=False):
+        return _impl_TrackArrayMeasure_tracklist(self.ds, var=var, min_count=min_count, return_mask=return_mask)
+
+
+TrackArrayMeasure.tracklist.__doc__ = _impl_TrackArrayMeasure_tracklist.__doc__
 
 
 @dataclass
@@ -130,3 +137,19 @@ TrackArrayDF.create_tracks_df.__doc__ = _impl_TrackArrayDF_create_tracks_df.__do
 TrackArrayDF.track_signals_to_df.__doc__ = _impl_TrackArrayDF_track_signals_to_df.__doc__
 
 
+
+
+def install_generated_accessors(CropArray, TrackArray):
+    """Attach generated accessors as @property on wrapper classes."""
+    # CropArray accessors
+    CropArray.plot    = property(lambda self, _A=CropArrayPlot: _A(self))
+    CropArray.measure = property(lambda self, _A=CropArrayMeasure: _A(self))
+    CropArray.view    = property(lambda self, _A=CropArrayView: _A(self))
+    CropArray.df      = property(lambda self, _A=CropArrayDF: _A(self))
+    CropArray.track   = property(lambda self, _A=CropArrayTrack: _A(self))
+
+    # TrackArray accessors
+    TrackArray.tplot    = property(lambda self, _A=TrackArrayPlot: _A(self))
+    TrackArray.tmeasure = property(lambda self, _A=TrackArrayMeasure: _A(self))
+    TrackArray.tview    = property(lambda self, _A=TrackArrayView: _A(self))
+    TrackArray.tdf      = property(lambda self, _A=TrackArrayDF: _A(self))

@@ -139,6 +139,25 @@ def generate() -> None:
             lines.append("")
         lines.append("")
 
+    # ---- Emit an installer that binds accessors as class properties (for autocomplete/tooltips) ----
+    lines.append("")
+    lines.append("")
+    lines.append("def install_generated_accessors(CropArray, TrackArray):")
+    lines.append('    """Attach generated accessors as @property on wrapper classes."""')
+    lines.append("    # CropArray accessors")
+    lines.append("    CropArray.plot    = property(lambda self, _A=CropArrayPlot: _A(self))")
+    lines.append("    CropArray.measure = property(lambda self, _A=CropArrayMeasure: _A(self))")
+    lines.append("    CropArray.view    = property(lambda self, _A=CropArrayView: _A(self))")
+    lines.append("    CropArray.df      = property(lambda self, _A=CropArrayDF: _A(self))")
+    lines.append("    CropArray.track   = property(lambda self, _A=CropArrayTrack: _A(self))")
+    lines.append("")
+    lines.append("    # TrackArray accessors")
+    lines.append("    TrackArray.tplot    = property(lambda self, _A=TrackArrayPlot: _A(self))")
+    lines.append("    TrackArray.tmeasure = property(lambda self, _A=TrackArrayMeasure: _A(self))")
+    lines.append("    TrackArray.tview    = property(lambda self, _A=TrackArrayView: _A(self))")
+    lines.append("    TrackArray.tdf      = property(lambda self, _A=TrackArrayDF: _A(self))")
+
+
     OUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Wrote {OUT_PATH}")
 

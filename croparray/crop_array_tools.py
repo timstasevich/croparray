@@ -25,7 +25,7 @@ from typing import Sequence
 
 from .crop_array_object import CropArray
 
-from .io import open_croparray, open_croparray_zarr
+from .io import open_croparray, open_croparray_zarr, open_as_trackarray
 from .build import _create_crop_array_dataset, create_crop_array
 from .measure import best_z_proj, measure_signal, measure_signal_raw, mask_props
 from .plot import montage

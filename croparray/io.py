@@ -114,3 +114,48 @@ def open_croparray_zarr(store: str, as_object: bool = True, **kwargs):
         return CropArray(ds)
 
     return ds
+
+
+def open_as_trackarray(
+    path: str,
+    *,
+    drop_vars=("int",),
+    drop_errors: str = "ignore",
+    as_object: bool = True,
+    **kwargs,
+):
+    """
+    Open a CropArray dataset and immediately convert it to a TrackArray.
+
+    Parameters
+    ----------
+    path : str
+        Path to a dataset readable by ``open_croparray`` (e.g. NetCDF).
+    drop_vars : sequence of str or None, default ("int",)
+        Variables to drop from the underlying Dataset before track conversion.
+        Set to None or empty to disable dropping.
+    drop_errors : {"ignore","raise"}, default "ignore"
+        Passed to ``Dataset.drop_vars``.
+    as_object : bool, default True
+        If True, return a TrackArray wrapper. If False, return the raw Dataset.
+    **kwargs
+        Additional keyword arguments forwarded to ``open_croparray``.
+
+    Returns
+    -------
+    TrackArray or xarray.Dataset
+    """
+    # Always open as CropArray internally
+    ca = open_croparray(path, as_object=True, **kwargs)
+
+    if drop_vars:
+        ca.ds = ca.ds.drop_vars(list(drop_vars), errors=drop_errors)
+
+    # Local import avoids circular dependency
+    from . import crop_array_tools
+
+    ta = crop_array_tools.track_array(ca, as_object=as_object)
+
+    # Help GC in large pipelines
+    del ca
+    return ta

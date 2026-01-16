@@ -31,11 +31,14 @@ class TrackArray(CropArray):
             raise ValueError("TrackArray dataset must have a 'track_id' dimension")
 
         # Track-specific accessors: DO NOT overwrite base .plot/.view/.df
-        from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF
+        from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure
 
-        self.tplot = TrackArrayPlot(self)
-        self.tview = TrackArrayView(self)
-        self.tdf = TrackArrayDF(self)
+        # --- accessor caches (private to avoid property collisions) ---
+        object.__setattr__(self, "_tplot", TrackArrayPlot(self))
+        object.__setattr__(self, "_tview", TrackArrayView(self))
+        object.__setattr__(self, "_tdf", TrackArrayDF(self))
+        object.__setattr__(self, "_tmeasure", TrackArrayMeasure(self))
+
 
     def __repr__(self) -> str:
         sizes = self.ds.sizes
@@ -44,6 +47,22 @@ class TrackArray(CropArray):
             f"tracks={sizes.get('track_id', '?')}, "
             f"t={sizes.get('t', '?')})"
         )
+
+    @property
+    def tplot(self):
+        return self._tplot
+
+    @property
+    def tview(self):
+        return self._tview
+
+    @property
+    def tdf(self):
+        return self._tdf
+
+    @property
+    def tmeasure(self):
+        return self._tmeasure
 
     @property
     def track_ids(self):
@@ -62,3 +81,27 @@ class TrackArray(CropArray):
             return self.ds._repr_html_()
         except Exception:
             return f"<pre>{repr(self.ds)}</pre>"
+
+    def sel(self, *args, **kwargs):
+        """xarray-like selection that preserves the wrapper type."""
+        return type(self)(self.ds.sel(*args, **kwargs))
+
+    def isel(self, *args, **kwargs):
+        """xarray-like index selection that preserves the wrapper type."""
+        return type(self)(self.ds.isel(*args, **kwargs))
+
+    def where(self, *args, **kwargs):
+        """xarray-like where that preserves the wrapper type."""
+        return type(self)(self.ds.where(*args, **kwargs))
+
+    def drop_vars(self, *args, **kwargs):
+        """Drop variables and preserve wrapper type."""
+        return type(self)(self.ds.drop_vars(*args, **kwargs))
+
+    def drop_sel(self, *args, **kwargs):
+        """Drop selection and preserve wrapper type."""
+        return type(self)(self.ds.drop_sel(*args, **kwargs))
+
+    def drop_isel(self, *args, **kwargs):
+        """Drop index selection and preserve wrapper type."""
+        return type(self)(self.ds.drop_isel(*args, **kwargs))

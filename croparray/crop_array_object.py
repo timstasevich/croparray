@@ -33,21 +33,57 @@ class CropArray:
             CropArrayOps,
         )
 
-        self.io = CropArrayIO(self)
-        self.build = CropArrayBuild(self)
-        self.measure = CropArrayMeasure(self)
-        self.plot = CropArrayPlot(self)
-        self.view = CropArrayView(self)
-        self.df = CropArrayDF(self)
-        self.track = CropArrayTrack(self)
-        self.ops = CropArrayOps(self)
+        object.__setattr__(self, "_io", CropArrayIO(self))
+        object.__setattr__(self, "_build", CropArrayBuild(self))
+        object.__setattr__(self, "_measure", CropArrayMeasure(self))
+        object.__setattr__(self, "_plot", CropArrayPlot(self))
+        object.__setattr__(self, "_view", CropArrayView(self))
+        object.__setattr__(self, "_df", CropArrayDF(self))
+        object.__setattr__(self, "_track", CropArrayTrack(self))
+        object.__setattr__(self, "_ops", CropArrayOps(self))
 
-    
-    def __getitem__(self, key: str):
-        return self.ds[key]
+
+    @property
+    def io(self):
+        return self._io
+
+    @property
+    def build(self):
+        return self._build
+
+    @property
+    def measure(self):
+        return self._measure
+
+    @property
+    def plot(self):
+        return self._plot
+
+    @property
+    def view(self):
+        return self._view
+
+    @property
+    def df(self):
+        return self._df
+
+    @property
+    def track(self):
+        return self._track
+
+    @property
+    def ops(self):
+        return self._ops
+
+    def __setitem__(self, key: str, value):
+        self.ds[key] = value
+
 
     def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(self.ds, name)
+
 
     def to_xarray(self):
         """Return the underlying xarray.Dataset."""
@@ -146,6 +182,30 @@ class CropArray:
             memory=memory,
         )
     
+    def sel(self, *args, **kwargs):
+        """xarray-like selection that preserves the wrapper type."""
+        return type(self)(self.ds.sel(*args, **kwargs))
+
+    def isel(self, *args, **kwargs):
+        """xarray-like index selection that preserves the wrapper type."""
+        return type(self)(self.ds.isel(*args, **kwargs))
+
+    def where(self, *args, **kwargs):
+        """xarray-like where that preserves the wrapper type."""
+        return type(self)(self.ds.where(*args, **kwargs))
+
+    def drop_vars(self, *args, **kwargs):
+        """Drop variables and preserve wrapper type."""
+        return type(self)(self.ds.drop_vars(*args, **kwargs))
+
+    def drop_sel(self, *args, **kwargs):
+        """Drop selection and preserve wrapper type."""
+        return type(self)(self.ds.drop_sel(*args, **kwargs))
+
+    def drop_isel(self, *args, **kwargs):
+        """Drop index selection and preserve wrapper type."""
+        return type(self)(self.ds.drop_isel(*args, **kwargs))
+
     @classmethod
     def concat(
         cls,
@@ -205,5 +265,14 @@ class CropArray:
             combine_attrs=combine_attrs,
         )
 
+        # Preserve wrapper type when concatenating TrackArrays.
+        # TrackArray inherits CropArray, so isinstance(..., CropArray) is True for both;
+        # we need to check the concrete class.
+        first_type = type(cas[0])
+        if all(type(ca) is first_type for ca in cas):
+            return first_type(ds_out)  # type: ignore[call-arg]
+
+        # Mixed types: fall back to CropArray (conservative)
         return cls(ds_out)
+
 

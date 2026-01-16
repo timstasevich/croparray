@@ -24,6 +24,10 @@ def track_array_single(ca, as_object: bool = False):
         Track-array dataset with dimension `track_id` and (typically) `fov`
         as a real dimension. Variables are aligned across tracks with fill_value=0.
     """
+    # Accept either CropArray object or raw xarray.Dataset
+    if hasattr(ca, "ds"):  # CropArray wrapper
+        ca = ca.ds
+
     my_ids = np.unique(ca["id"].values)
     my_ids = my_ids[pd.notnull(my_ids)]
     my_ids = my_ids[my_ids != 0]
@@ -144,9 +148,18 @@ def track_array(
         efficient because each slice is modest and your per-slice `track_array_single()`
         is already vectorized with xarray operations.
     """
+    # Accept either CropArray object or raw xarray.Dataset
+    if hasattr(ca_in, "ds"):  # CropArray wrapper
+        ca_in = ca_in.ds
+
     # Discover grouping dimensions automatically.
     # This includes fov (if present) and any "concat dims" such as Exp/Cell/Batch/etc.
     group_dims = [d for d in ca_in.dims if d not in base_dims]
+
+    # track_array_single() already preserves fov as a dimension; don't group over it
+    survive_dims = {"fov"}  # add others here if needed
+    group_dims = [d for d in group_dims if d not in survive_dims]
+
 
     # If there are no extra dimensions to group over, fall back to single behavior.
     if not group_dims:
@@ -188,16 +201,15 @@ def track_array(
             return TrackArray(empty)
         return empty
 
-    # Concatenate all per-group TrackArrays along a MultiIndex, then unstack back
-    # into explicit grouping dimensions.
-    out = (
-        xr.concat(
-            tas,
-            dim=pd.MultiIndex.from_tuples(keys, names=group_dims),
-            fill_value=0,
-        )
-        .unstack("dim_0")
-    )
+    # Concatenate all per-group TrackArrays along an explicitly named dimension,
+    # attach the MultiIndex as coordinates, then unstack back into group dims.
+    mi = pd.MultiIndex.from_tuples(keys, names=group_dims)
+    stack_dim = "__group__"
+
+    out = xr.concat(tas, dim=stack_dim, fill_value=0)
+    out = out.assign_coords({stack_dim: mi})
+    out = out.unstack(stack_dim)
+
 
     # Prefer a consistent dimension order
     out = out.transpose(*group_dims, "track_id", "fov", "t", "z", "y", "x", "ch", missing_dims="ignore")
