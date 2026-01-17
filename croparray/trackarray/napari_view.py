@@ -16,6 +16,14 @@ def display_cell_and_tracks(img_croparray, tracks_df):
     Returns:
     napari.Viewer: The viewer instance with the images and tracks added.
     """
+    try:
+        import napari
+    except ImportError as e:
+        raise ImportError(
+            "napari is required for display_cell_and_tracks(). "
+            "Install it (e.g., `pip install napari[all]` or via conda-forge)."
+        ) from e
+    
     # Compute the maximum projection along the specified axis
     img_max = np.max(img_croparray[0, :, :, :, :], axis=1)
     

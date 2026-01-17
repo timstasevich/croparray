@@ -134,7 +134,6 @@ def _normalize_for_display(
     out = ((a - q0) / (q1 - q0 + _EPS)).clip(0, 1)
     return out
 
-
 def _facetgrid_cleanup(g, *, suppress_labels: bool, suptitle: Optional[str]) -> None:
     """
     Best-effort cleanup for xarray FacetGrid outputs.
@@ -234,8 +233,14 @@ def plot_trackarray_crops(
         if rolling and rolling > 1:
             bz = bz.rolling(t=rolling, center=True, min_periods=1).mean()
 
+        if "ch" in bz.dims:
+            # canonical order for channelled image stacks
+            bz = bz.transpose("t", "y", "x", "ch")
+
+
         # ---- No channel dimension ----
         if "ch" not in bz.dims:
+            bz = bz.transpose("t", "y", "x")  
             normed = _normalize_for_display(bz, quantile_range=quantile_range)
 
             g = normed.plot.imshow(
@@ -262,7 +267,7 @@ def plot_trackarray_crops(
 
         # ---- Single-channel override ----
         if ch is not None:
-            bz1 = bz.isel(ch=int(ch))
+            bz1 = bz.isel(ch=int(ch)).transpose("t", "y", "x") 
             normed = _normalize_for_display(bz1, quantile_range=quantile_range)
 
             g = normed.plot.imshow(
@@ -290,7 +295,7 @@ def plot_trackarray_crops(
         # ---- Normalize each channel separately ----
         n_ch = int(bz.sizes["ch"])
         ch_normed = [
-            _normalize_for_display(bz.isel(ch=i), quantile_range=quantile_range)
+            _normalize_for_display(bz.isel(ch=i).transpose("t", "y", "x"), quantile_range=quantile_range)
             for i in range(n_ch)
         ]
         normed_all = xr.concat(ch_normed, dim="ch").assign_coords(ch=bz["ch"].values)
