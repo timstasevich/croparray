@@ -41,8 +41,12 @@ def perform_tracking_with_exclusions(df, search_range=10, memory=1):
     excluded_data['particle'] = -1  # Assign default track_id to excluded rows
     
     # Combine tracked data with excluded data and sort by original index to maintain order
+    #combined_data = pd.concat([tracked_data, excluded_data]).sort_index()
+    #combined_data['track_id'] = combined_data['particle'].fillna(-1).astype(int)+1
     combined_data = pd.concat([tracked_data, excluded_data]).sort_index()
-    combined_data['track_id'] = combined_data['particle'].fillna(-1).astype(int)+1
+    combined_data['track_id'] = combined_data['particle'].astype('Int64').fillna(-1).astype(int)
+    combined_data = combined_data.drop(columns='particle')
+
 
     return combined_data
 
@@ -77,21 +81,33 @@ def to_track_array(
     dft_filtered = perform_tracking_with_exclusions(dft[dft['ch'] == channel_to_track], search_range=search_range, memory=memory)
     
     # Step 3: Filter out short tracks
-    track_lengths = dft_filtered.groupby('track_id').size()
+    #track_lengths = dft_filtered.groupby('track_id').size()
+    #short_tracks = track_lengths[track_lengths < min_track_length].index
+    #dft_filtered.loc[dft_filtered['track_id'].isin(short_tracks), 'track_id'] = -1
+    track_lengths = dft_filtered.loc[dft_filtered['track_id'] >= 0].groupby('track_id').size()
     short_tracks = track_lengths[track_lengths < min_track_length].index
-    dft_filtered.loc[dft_filtered['track_id'].isin(short_tracks), 'track_id'] = 0
-    
+    dft_filtered.loc[dft_filtered['track_id'].isin(short_tracks), 'track_id'] = -1
+    dft_filtered = dft_filtered.drop_duplicates(subset=['fov', 'n', 't'])
+
     # Step 4: Update the original dataset with new track IDs
+    if 'track_id' not in ca:
+        raise KeyError(
+            "Expected 'track_id' to exist in CropArray. "
+            "This dataset was likely created with an older croparray version."
+        )
+
+    dft_filtered = dft_filtered.drop_duplicates(subset=['fov', 'n', 't'])
     dft_filtered.set_index(['fov', 'n', 't'], inplace=True)
+
     track_id_array = dft_filtered['track_id'].to_xarray()
+    track_id_array = (
+        track_id_array
+        .reindex_like(ca['track_id'])
+        .fillna(-1)
+        .astype(int)
+    )
 
-    # Preserve original IDs (spot-level) once, if present and not already preserved
-    if "id" in ca and "spot_id" not in ca:
-        ca["spot_id"] = ca["id"]
-
-    # Overwrite id with track IDs (post-tracking semantics)
-    ca["id"] = track_id_array
-
+    ca['track_id'] = track_id_array
     return track_array(ca, as_object=True)
 
 

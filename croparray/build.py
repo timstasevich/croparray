@@ -44,19 +44,21 @@ def _create_crop_array_dataset(video, df, **kwargs):
         An X-array containing the intensities of all crops in the crop array.
     2. ca.id -- dims: (fov, n, t); attributes: 'units'; uint16
         An x-array containing the ids of the crops in the video.
-    3. ca.yc -- dims: (fov, n, t, ch); attributes: 'units'; uint16
+    3. ca.track_id -- dims: (fov, n, t); int
+        Track assignment for each spot. -1 indicates untracked.
+    4. ca.yc -- dims: (fov, n, t, ch); attributes: 'units'; uint16
         An x-array containing the yc coordinates of the crops in the video.
-    4. ca.xc -- dims: (fov, n, t, ch); attributes: 'units'; uint16
+    5. ca.xc -- dims: (fov, n, t, ch); attributes: 'units'; uint16
         An x-array containing the xc coordinates of the crops in the video.
-    5. ca.xy_pad -- dims: (); attributes: 'units'; uint16
+    6. ca.xy_pad -- dims: (); attributes: 'units'; uint16
         A 1D array containing xy-pad. 
-    6. ca.dt -- dims: (); attributes: 'units'; float
+    7. ca.dt -- dims: (); attributes: 'units'; float
         A 1D arary containing dt.
-    7. ca.dz -- dims: (); attributes: 'units'; float
+    8. ca.dz -- dims: (); attributes: 'units'; float
         A 1D arary containing dz.
-    8. ca.dy -- dims: (); attributes: 'units'; float
+    9. ca.dy -- dims: (); attributes: 'units'; float
         A 1D arary containing dy.
-    9. ca.dx -- dims: (); attributes: 'units'; float
+    10. ca.dx -- dims: (); attributes: 'units'; float
         A 1D arary containing dx.
     """
     # Get the optional key word arguments (kwargs):
@@ -68,6 +70,33 @@ def _create_crop_array_dataset(video, df, **kwargs):
     units = kwargs.get('units',['space','time'])
     name = kwargs.get('name', 'video_filename')
     date = kwargs.get('date', 'video_date') 
+
+    # ----------------------------
+    # Enforce id / track_id schema
+    # ----------------------------
+
+    # Ensure spot id exists
+    if 'id' not in df.columns:
+        # Generate a stable spot id if missing
+        # This is per-row; uniqueness across concatenation is handled later
+        df = df.copy()
+        df['id'] = np.arange(len(df), dtype=np.int64)
+
+    # Ensure integer id
+    df['id'] = df['id'].astype(np.int64)
+
+    # Ensure track_id exists
+    if 'track_id' in df.columns:
+        # Normalize: NaN -> -1, allow 0 as valid
+        df['track_id'] = (
+            pd.to_numeric(df['track_id'], errors='coerce')
+            .fillna(-1)
+            .astype(np.int32)
+        )
+    else:
+        df = df.copy()
+        df['track_id'] = -1
+
 
     # Get dimensions of video
     n_fov, n_frames, z_slices, height_y, width_x, n_channels = list(video.shape)
@@ -120,7 +149,15 @@ def _create_crop_array_dataset(video, df, **kwargs):
             # fill my_layers numpy arrays
             col_counter = 0
             for col in my_columns:   # these are the other columns besides 'n', 'f, and 'fov' in the 
-                my_vals = my_spots[col].round().values.astype(int) # this preserves order in df, so same as my_ns above
+                #my_vals = my_spots[col].round().values.astype(int) # this preserves order in df, so same as my_ns above
+                my_vals = my_spots[col].values
+
+                # Only round coordinates-like quantities; IDs should not be rounded
+                if col not in ('id', 'track_id'):
+                    my_vals = np.round(my_vals)
+
+                my_vals = my_vals.astype(int)
+
                 my_layers[col_counter, my_fov_ind, :len(my_vals), my_f] = my_vals 
                 col_counter = col_counter + 1
             # create temp arrays to hold (x, y) coords in all channels for all spots at my_fov and my_f

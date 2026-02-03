@@ -6,12 +6,9 @@ import itertools
 # Make track_id dimension in crop array (that has been tracked)
 def track_array_single(ca, as_object: bool = False):
     """
-    Create a track-array dataset from a tracked crop-array dataset by grouping
-    entries by unique track IDs (stored in ca['id']).
-
-    Note: In the croparray pipeline, ca['id'] is treated as the active identifier.
-    After tracking, ca['id'] is overwritten to store track IDs (0 indicates untracked /
-    filtered) and the original 'id' is moved to 'spot_id'.
+    Track IDs live in ca['track_id']
+    id is preserved as spot ID
+    -1 means untracked
 
     Parameters
     ----------
@@ -28,9 +25,13 @@ def track_array_single(ca, as_object: bool = False):
     if hasattr(ca, "ds"):  # CropArray wrapper
         ca = ca.ds
 
-    my_ids = np.unique(ca["id"].values)
+    # my_ids = np.unique(ca["id"].values)
+    # my_ids = my_ids[pd.notnull(my_ids)]
+    # my_ids = my_ids[my_ids != 0]
+    my_ids = np.unique(ca["track_id"].values)
     my_ids = my_ids[pd.notnull(my_ids)]
-    my_ids = my_ids[my_ids != 0]
+    my_ids = my_ids[my_ids >= 0]
+
 
     if len(my_ids) == 0:
         empty = xr.Dataset()
@@ -41,10 +42,10 @@ def track_array_single(ca, as_object: bool = False):
 
     my_das = []
     for tid in my_ids:
-        g = ca.groupby("id")[tid]
+        g = ca.groupby("track_id")[tid]
         stacked_dim = next((d for d in g.dims if d.startswith("stacked_")), None)
         if stacked_dim is None:
-            raise ValueError("Could not find stacked dimension created by groupby('id').")
+            raise ValueError("Could not find stacked dimension created by groupby('track_id').")
 
         temp = (
             g.reset_index(stacked_dim)
@@ -74,7 +75,7 @@ def track_array_single(ca, as_object: bool = False):
 
 
 
-def track_array(
+def track_array( 
     ca_in,
     as_object: bool = False,
     *,
@@ -95,7 +96,7 @@ def track_array(
         - Treatment
         - (and others)
 
-    Track IDs stored in `ca_in["id"]` are typically assigned *within* an individual
+    Track IDs stored in `ca_in["track_id"]` are typically assigned *within* an individual
     acquisition (e.g., within one Cell / FOV / movie). Therefore, running a single
     `groupby("id")` across a concatenated dataset can accidentally merge tracks
     from different Cells/Exps/etc. whenever track IDs overlap numerically (which
@@ -112,7 +113,8 @@ def track_array(
     Parameters
     ----------
     ca_in : xarray.Dataset
-        Crop-array dataset containing an `id` variable with per-(fov,n,t,...) track IDs.
+        Crop-array dataset containing a `track_id` variable with per-(fov,n,t,...) track IDs and 'id' 
+        is the 'spot_id'.
         This dataset may be a "native" crop-array, or a concatenation across new
         dimensions such as Exp/Cell/Batch/etc.
 
@@ -139,9 +141,9 @@ def track_array(
     Notes
     -----
     - Missing IDs:
-        This function drops entries where `id` is NaN to avoid `KeyError: nan` during groupby.
+        This function drops entries where `track_id` is NaN to avoid `KeyError: nan` during groupby.
     - Untracked IDs:
-        By convention your pipeline uses 0 for "untracked/filtered". Those are excluded
+        By convention your pipeline uses -1 for "untracked/filtered". Those are excluded
         inside `track_array_single()` (and can also be filtered there).
     - Performance:
         This loops over all groups (Exp×Cell×fov×...). In typical use this is still
@@ -174,8 +176,8 @@ def track_array(
         ca_sub = ca_in.sel(sel)
 
         # Drop missing track IDs (prevents KeyError: nan during groupby)
-        if "id" in ca_sub:
-            ca_sub = ca_sub.where(ca_sub["id"].notnull(), drop=True)
+        if "track_id" in ca_sub:
+            ca_sub = ca_sub.where(ca_sub["track_id"].notnull(), drop=True)
 
         # Build TrackArray for this slice using the original implementation.
         ta = track_array_single(ca_sub, as_object=False)

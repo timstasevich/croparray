@@ -148,6 +148,19 @@ def open_as_trackarray(
     # Always open as CropArray internally
     ca = open_croparray(path, as_object=True, **kwargs)
 
+    ca = open_croparray(fn, as_object=True)
+
+    # --- backward-compat / schema guard ---
+    if "track_id" not in ca.ds:
+        raise KeyError(
+            "Cannot convert to TrackArray: dataset has no 'track_id'.\n"
+            "This file was likely created with an older croparray version where "
+            "'id' encoded track labels.\n\n"
+            "Fix options:\n"
+            "  • Add ca['track_id'] manually (-1 = untracked)\n"
+            "  • Or re-run tracking with to_track_array()\n"
+        )
+
     if drop_vars:
         ca.ds = ca.ds.drop_vars(list(drop_vars), errors=drop_errors)
 
