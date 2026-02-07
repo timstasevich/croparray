@@ -1,5 +1,6 @@
 import numpy as np
 import xarray as xr
+import pandas as pd
 
 def _create_crop_array_dataset(video, df, **kwargs):
     """
