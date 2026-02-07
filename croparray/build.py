@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Union, Literal
 import numpy as np
 import xarray as xr
 import pandas as pd
+from pathlib import Path
 
 try:
     __all__
 except NameError:
     __all__ = []
-__all__ += ["standardize_video_axes"]
+__all__ += ["standardize_video_axes","standardize_spots"]
 
 _CANONICAL = ("fov", "f", "z", "y", "x", "ch")
 
@@ -27,6 +27,288 @@ def _norm_axis(a: str) -> str:
     if a in ("slice", "plane"):
         return "z"
     return a
+
+def _detect_tracker_from_columns(cols) -> str:
+    cols = set(cols)
+    if {"POSITION_X", "POSITION_Y", "POSITION_Z", "FRAME"}.issubset(cols):
+        return "trackmate"
+    cols_lc = {c.lower() for c in cols}
+    if {"x", "y", "frame"}.issubset(cols_lc):
+        return "trackpy"
+    if {"xc", "yc", "f"}.issubset(cols_lc) or {"xc", "yc", "frame"}.issubset(cols_lc):
+        return "croparray"
+    return "unknown"
+
+
+def _detect_tracker_from_path(path: Path) -> str:
+    # quick sniff: TrackMate has those POSITION_* headers on row 0
+    try:
+        df0 = pd.read_csv(path, nrows=1)
+        t = _detect_tracker_from_columns(df0.columns)
+        if t != "unknown":
+            return t
+    except Exception:
+        pass
+    return "unknown"
+
+def _trackmate_units_from_csv(path: Path) -> dict:
+    """
+    Return a dict mapping column name -> unit string (lowercased),
+    e.g. {"POSITION_X": "micron", "POSITION_T": "sec"}.
+    """
+    import csv
+
+    with path.open("r", newline="") as f:
+        reader = csv.reader(f)
+        rows = []
+        for i, row in enumerate(reader):
+            rows.append(row)
+            if i >= 6:
+                break
+
+    if len(rows) < 4:
+        return {}
+
+    header = rows[0]
+    units_row = rows[3]  # TrackMate: units usually live here
+
+    units = {}
+    for j, col in enumerate(header):
+        if j < len(units_row):
+            u = (units_row[j] or "").strip().lower()
+            u = u.strip("()")  # "(micron)" -> "micron"
+            if u:
+                units[col] = u
+    return units
+
+
+def _read_trackmate_csv(path: Path) -> "pd.DataFrame":
+    # robust TrackMate preamble handling (skips abbrev/units rows)
+    import csv
+    with path.open("r", newline="") as f:
+        reader = csv.reader(f)
+        rows = []
+        for i, row in enumerate(reader):
+            rows.append(row)
+            if i >= 25:
+                break
+
+    if not rows:
+        raise ValueError(f"Empty CSV: {path}")
+
+    header = rows[0]
+    try:
+        id_idx = header.index("ID")
+    except ValueError:
+        # common TrackMate export: 3-line preamble
+        skiprows = [1, 2, 3]
+        return pd.read_csv(path, header=0, skiprows=skiprows)
+
+    start_row = 1
+    for i in range(1, len(rows)):
+        v = rows[i][id_idx] if id_idx < len(rows[i]) else ""
+        if isinstance(v, str) and v.strip().isdigit():
+            start_row = i
+            break
+
+    skiprows = list(range(1, start_row))
+    return pd.read_csv(path, header=0, skiprows=skiprows)
+
+
+def _standardize_spots_df(
+    df: "pd.DataFrame",
+    *,
+    tracker: str,
+    fov: int,
+    xy_um_per_px: Optional[float],
+    z_um_per_plane: Optional[float],
+    keep_cols: Optional[Sequence[str]],
+    units: Optional[dict] = None,
+    require_calibration_if_needed: bool = True,
+) -> "pd.DataFrame":
+    """
+    Internal: normalize a spots dataframe into croparray canonical columns.
+
+    Canonical required output columns:
+      fov, id, f, yc, xc, zc
+    Optional:
+      track_id
+    """
+    tracker = tracker.lower()
+    df = df.copy()
+
+    # -----------------------------
+    # Helper: normalize unit strings
+    # -----------------------------
+    def _norm_unit(u: Optional[str]) -> str:
+        if u is None:
+            return ""
+        u = str(u).strip().lower()
+        u = u.strip("()")
+        # common variants
+        if u in ("pixel", "pixels", "px"):
+            return "px"
+        if u in ("micron", "microns", "um", "µm", "micrometer", "micrometers"):
+            return "um"
+        if u in ("nm", "nanometer", "nanometers"):
+            return "nm"
+        return u  # unknown; pass through
+
+    def _unit_for(colname: str) -> str:
+        if not units:
+            return ""
+        return _norm_unit(units.get(colname, ""))
+
+    # -----------------------------
+    # TRACKMATE
+    # -----------------------------
+    if tracker == "trackmate":
+        # rename TrackMate -> internal names (X_um/Y_um/Z_um are "position in exported spatial units")
+        rename = {
+            "POSITION_X": "X_um",
+            "POSITION_Y": "Y_um",
+            "POSITION_Z": "Z_um",
+            "FRAME": "f",
+            "TRACK_ID": "track_id",
+            "ID": "id",
+        }
+        df = df.rename(columns=rename, errors="ignore")
+
+        # Positions could also already be in xc/yc/zc if user preprocessed
+        has_xyz = {"X_um", "Y_um"}.issubset(df.columns)
+        has_z = "Z_um" in df.columns
+
+        if not has_xyz and not {"xc", "yc"}.issubset(df.columns):
+            raise ValueError(
+                "TrackMate spots missing position columns. "
+                "Expected POSITION_X/POSITION_Y (or already-standardized xc/yc)."
+            )
+
+        # Determine exported spatial units from preamble (if available)
+        x_unit = _unit_for("POSITION_X")
+        y_unit = _unit_for("POSITION_Y")
+        z_unit = _unit_for("POSITION_Z")
+
+        # Decide conversion needs
+        # If unit is blank/unknown, we assume already in pixel units (no conversion)
+        needs_xy_convert = (x_unit in ("um", "nm")) or (y_unit in ("um", "nm"))
+        needs_z_convert = (z_unit in ("um", "nm"))
+
+        # Build xc/yc from X_um/Y_um if present, else assume already xc/yc
+        if has_xyz:
+            if needs_xy_convert:
+                if xy_um_per_px is None:
+                    if require_calibration_if_needed:
+                        raise ValueError(
+                            f"TrackMate POSITION_X/Y appear to be in '{x_unit or y_unit}', "
+                            "but xy_um_per_px was not provided."
+                        )
+                    # fallback: treat as pixels
+                    df["xc"] = df["X_um"]
+                    df["yc"] = df["Y_um"]
+                else:
+                    # If exported in nm, convert using nm_per_px = xy_um_per_px*1000
+                    denom = float(xy_um_per_px) * (1000.0 if (x_unit == "nm" or y_unit == "nm") else 1.0)
+                    df["xc"] = df["X_um"] / denom
+                    df["yc"] = df["Y_um"] / denom
+            else:
+                # px/unknown -> treat as already pixels
+                df["xc"] = df["X_um"]
+                df["yc"] = df["Y_um"]
+
+        # zc
+        if "zc" not in df.columns:
+            if has_z:
+                if needs_z_convert:
+                    if z_um_per_plane is None:
+                        if require_calibration_if_needed:
+                            raise ValueError(
+                                f"TrackMate POSITION_Z appears to be in '{z_unit}', "
+                                "but z_um_per_plane was not provided."
+                            )
+                        df["zc"] = df["Z_um"]
+                    else:
+                        denom = float(z_um_per_plane) * (1000.0 if z_unit == "nm" else 1.0)
+                        df["zc"] = df["Z_um"] / denom
+                else:
+                    df["zc"] = df["Z_um"]
+            else:
+                # no z in TrackMate export -> treat as singleton z=0
+                df["zc"] = 0.0
+
+    # -----------------------------
+    # TRACKPY
+    # -----------------------------
+    elif tracker == "trackpy":
+        cols_lc = {c.lower(): c for c in df.columns}
+
+        def _col(name: str) -> str:
+            return cols_lc.get(name, name)
+
+        if _col("frame") in df.columns and "f" not in df.columns:
+            df = df.rename(columns={_col("frame"): "f"})
+        if _col("x") in df.columns and "xc" not in df.columns:
+            df = df.rename(columns={_col("x"): "xc"})
+        if _col("y") in df.columns and "yc" not in df.columns:
+            df = df.rename(columns={_col("y"): "yc"})
+        if "zc" not in df.columns:
+            df["zc"] = 0.0
+        if _col("particle") in df.columns and "track_id" not in df.columns:
+            df = df.rename(columns={_col("particle"): "track_id"})
+        if "id" not in df.columns:
+            df["id"] = np.arange(len(df), dtype=int)
+
+    # -----------------------------
+    # CROPARAY / UNKNOWN (best-effort)
+    # -----------------------------
+    else:
+        cols_lc = {c.lower(): c for c in df.columns}
+        if "f" not in df.columns and "frame" in cols_lc:
+            df = df.rename(columns={cols_lc["frame"]: "f"})
+        if "xc" not in df.columns and "x" in cols_lc:
+            df = df.rename(columns={cols_lc["x"]: "xc"})
+        if "yc" not in df.columns and "y" in cols_lc:
+            df = df.rename(columns={cols_lc["y"]: "yc"})
+        if "zc" not in df.columns:
+            df["zc"] = 0.0
+        if "id" not in df.columns:
+            df["id"] = np.arange(len(df), dtype=int)
+
+    # -----------------------------
+    # Final required columns check
+    # -----------------------------
+    required = {"id", "f", "xc", "yc", "zc"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Spots table missing required columns {sorted(missing)}. Got {list(df.columns)}")
+
+    # Enforce numeric types where it matters
+    df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(-1).astype(np.int64)
+    df["f"] = pd.to_numeric(df["f"], errors="coerce").fillna(0).astype(np.int32)
+
+    # Keep xc/yc/zc as float (subpixel ok)
+    df["xc"] = pd.to_numeric(df["xc"], errors="coerce")
+    df["yc"] = pd.to_numeric(df["yc"], errors="coerce")
+    df["zc"] = pd.to_numeric(df["zc"], errors="coerce").fillna(0.0)
+
+    # fov assignment
+    df["fov"] = int(fov)
+
+    # -----------------------------
+    # Choose output columns
+    # -----------------------------
+    base = ["fov"]
+    if "track_id" in df.columns:
+        base += ["track_id"]
+    base += ["id", "f", "yc", "xc", "zc"]
+
+    if keep_cols is None:
+        extra = [c for c in df.columns if "INTENSITY" in c.upper()]
+    else:
+        extra = [c for c in keep_cols if c in df.columns]
+
+    return df[base + extra].copy()
+
 
 def standardize_video_axes(
     video: np.ndarray,
@@ -71,6 +353,116 @@ def standardize_video_axes(
 
     perm = [axes2.index(ax) for ax in _CANONICAL]
     return np.transpose(video2, axes=perm)
+
+
+def standardize_spots(
+    source: Union[str, Path, "pd.DataFrame"],
+    *,
+    tracker: Literal["auto", "trackmate", "trackpy", "croparray"] = "auto",
+    fov: int = 0,
+    xy_um_per_px: Optional[float] = None,
+    z_um_per_plane: Optional[float] = None,
+    keep_cols: Optional[Sequence[str]] = None,
+    require_calibration_if_needed: bool = True,
+) -> "pd.DataFrame":
+    """
+    Convert tracker output into a croparray-ready spots dataframe.
+
+    Output (always includes):
+      - fov, id, f, yc, xc, zc
+    Output (optional):
+      - track_id (if present in the input)
+    Plus:
+      - extra columns requested by `keep_cols` (or default intensity columns)
+
+    Unit handling (TrackMate)
+    -------------------------
+    TrackMate exports POSITION_X/Y/Z in the *image spatial units* at export time
+    (often micron/um; sometimes pixel). We read the units row from the CSV and:
+
+      - if units indicate pixel/px: treat values as already in pixels/planes
+      - if units indicate micron/um: convert to pixels/planes using xy_um_per_px / z_um_per_plane
+      - if units indicate nm: convert to pixels/planes using xy_um_per_px / z_um_per_plane (with nm scaling)
+
+    If conversion is needed but calibration is missing:
+      - if require_calibration_if_needed=True (default), raise ValueError
+      - else, fall back to treating coordinates as already pixel/plane units
+
+    Parameters
+    ----------
+    source
+        Path to a CSV file (TrackMate/TrackPy/etc.) or a pandas DataFrame.
+    tracker
+        "auto" | "trackmate" | "trackpy" | "croparray"
+    fov
+        Field-of-view index to assign to all rows in this spots table.
+    xy_um_per_px
+        Microns per pixel (used when TrackMate units are micron/um/nm).
+    z_um_per_plane
+        Microns per z-plane (used when TrackMate units are micron/um/nm).
+    keep_cols
+        Extra columns to retain in the output. If None, keeps intensity-like columns by default.
+    require_calibration_if_needed
+        If True, raise when TrackMate units require conversion but calibration is missing.
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    # ---- DataFrame input ----
+    if isinstance(source, pd.DataFrame):
+        df = source.copy()
+        if tracker == "auto":
+            tracker = _detect_tracker_from_columns(df.columns)
+
+        units = None  # no CSV preamble available
+        return _standardize_spots_df(
+            df,
+            tracker=tracker,
+            fov=fov,
+            xy_um_per_px=xy_um_per_px,
+            z_um_per_plane=z_um_per_plane,
+            keep_cols=keep_cols,
+            units=units,
+            require_calibration_if_needed=require_calibration_if_needed,
+        )
+
+    # ---- Path input ----
+    path = Path(source)
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    if tracker == "auto":
+        tracker = _detect_tracker_from_path(path)
+
+    tracker_lc = tracker.lower()
+
+    # Read input into a dataframe + any sidecar metadata needed for standardization
+    units = None
+    if tracker_lc == "trackmate":
+        # Get units (micron/pixel/etc.) from TrackMate CSV preamble
+        units = _trackmate_units_from_csv(path)
+        df = _read_trackmate_csv(path)
+    else:
+        # For trackpy/croparray/unknown: straight read for now
+        df = pd.read_csv(path)
+
+        # If auto-detect said unknown, try column sniff now that we have the header
+        if tracker_lc == "unknown":
+            tracker_lc = _detect_tracker_from_columns(df.columns)
+
+    return _standardize_spots_df(
+        df,
+        tracker=tracker_lc,
+        fov=fov,
+        xy_um_per_px=xy_um_per_px,
+        z_um_per_plane=z_um_per_plane,
+        keep_cols=keep_cols,
+        units=units,
+        require_calibration_if_needed=require_calibration_if_needed,
+    )
+
+
 
 
 def _create_crop_array_dataset(video, df, **kwargs):

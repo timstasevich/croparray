@@ -2,224 +2,316 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union, List
+from typing import List, Optional, Sequence, Tuple, Union
+import json
+import time
 
 import numpy as np
 
-# Optional dependencies for GUI
-import napari
-from magicgui import magicgui
-
-from qtpy.QtCore import QTimer
+from magicgui.widgets import (
+    Container,
+    ComboBox,
+    FileEdit,
+    Label,
+    PushButton,
+    CheckBox,
+)
 from qtpy.QtWidgets import QApplication
-import time
 
-try:
-    from tifffile import imread as tif_imread
-except Exception:
-    tif_imread = None
-
-__all__ = [
-    "label_video_axes",
-    "AxisLabelResult",
-]
+__all__ = ["define_video_axes"]
 
 
+
+# If you already have these in gui.py, keep yours and delete these duplicates.
 AXIS_CHOICES = ("(none)", "fov", "f", "z", "y", "x", "ch")
 
 
-@dataclass
+@dataclass(frozen=True)
 class AxisLabelResult:
-    axes: Tuple[str, ...]          # e.g. ("f", "z", "y", "x", "ch")
-    shape: Tuple[int, ...]         # original shape
-    notes: str                     # any warnings / normalization notes
+    axes: Tuple[str, ...]   # e.g. ("f", "z", "y", "x", "ch") in CURRENT order, excluding "(none)"
+    shape: Tuple[int, ...]
+    notes: str = ""
 
 
-def _load_video_any(path: Union[str, Path]) -> np.ndarray:
-    path = Path(path)
-    if tif_imread is None:
-        raise ImportError("tifffile is required to load TIFF stacks. Install tifffile.")
-    return tif_imread(str(path))
-
-
-def label_video_axes(
-    video: Optional[np.ndarray] = None,
-    *,
-    path: Optional[Union[str, Path]] = None,
-    layer_name: str = "video",
-    block: bool = True,
-) -> AxisLabelResult:
-    """
-    Open a napari GUI to label each dimension of a video array.
-
-    You label each axis with dropdowns: fov, f, z, y, x, ch, or (none).
-    Returns an AxisLabelResult with an `axes` tuple describing the CURRENT
-    order of `video`.
-
-    Parameters
-    ----------
-    video
-        Numpy array already loaded. If None, `path` must be provided.
-    path
-        File to load (TIFF stack via tifffile).
-    layer_name
-        Napari layer name.
-    block
-        If True, blocks until you click "Accept" or close the viewer.
-
-    Returns
-    -------
-    AxisLabelResult
-    """
-    if video is None:
-        if path is None:
-            raise ValueError("Provide either `video` or `path`.")
-        video = _load_video_any(path)
-
-    shape = tuple(int(s) for s in video.shape)
-    ndim = video.ndim
-
-    # Pre-fill heuristic: last two largest -> y/x, small -> ch, etc.
-    # This is intentionally conservative (you’ll override via GUI).
+def _guess_axes_from_shape(shape: Tuple[int, ...]) -> List[str]:
+    """Conservative guess: largest 2 -> y/x, small -> ch, then try z/fov/f."""
+    ndim = len(shape)
     dim_sizes = list(enumerate(shape))
     sorted_by_size = sorted(dim_sizes, key=lambda t: t[1], reverse=True)
 
     guess = ["(none)"] * ndim
     if ndim >= 2:
-        # assign y/x as two largest dims (order among them is ambiguous)
         guess[sorted_by_size[0][0]] = "y"
         guess[sorted_by_size[1][0]] = "x"
 
-    # guess channel as a small dim (<= 4) if exists and not already used
     for i, s in dim_sizes:
         if s in (1, 2, 3, 4) and guess[i] == "(none)":
             guess[i] = "ch"
             break
 
-    # guess z/time/fov among remaining dims (pure guess)
     remaining = [i for i in range(ndim) if guess[i] == "(none)"]
-    # common patterns: (t,z,...) or (z,t,...) or include fov
-    # If there is a dim around 10-80 -> z; around 20-5000 -> f; around 2-50 -> fov
     for i in remaining:
         s = shape[i]
         if 5 <= s <= 80:
             guess[i] = "z"
             break
+
     remaining = [i for i in range(ndim) if guess[i] == "(none)"]
     for i in remaining:
         s = shape[i]
         if 2 <= s <= 50:
             guess[i] = "fov"
             break
+
     remaining = [i for i in range(ndim) if guess[i] == "(none)"]
     for i in remaining:
         guess[i] = "f"
         break
 
-    # --- napari viewer ---
-    viewer = napari.Viewer()
-    viewer.add_image(video, name=layer_name)
+    return guess
 
+
+def _validate_axes_labels(labels: List[str]) -> AxisLabelResult:
+    """
+    Validate dropdown labels and construct AxisLabelResult.axes (excluding "(none)").
+    Requires y and x exactly once; others at most once.
+    """
+    labels_norm = [None if lab == "(none)" else lab for lab in labels]
+
+    for req in ("y", "x"):
+        if labels_norm.count(req) != 1:
+            raise ValueError(f"Axis '{req}' must be selected exactly once.")
+
+    for opt in ("ch", "z", "f", "fov"):
+        if labels_norm.count(opt) > 1:
+            raise ValueError(f"Axis '{opt}' can be selected at most once.")
+
+    axes = tuple(lab for lab in labels_norm if lab is not None)
+    notes = []
+    if labels_norm.count("ch") == 0:
+        notes.append("No channel axis selected; ch will be treated as singleton.")
+    if labels_norm.count("z") == 0:
+        notes.append("No z axis selected; z will be treated as singleton.")
+    if labels_norm.count("f") == 0:
+        notes.append("No frame/time axis selected; f will be treated as singleton.")
+    if labels_norm.count("fov") == 0:
+        notes.append("No fov axis selected; fov will be treated as singleton.")
+
+    # shape is filled by caller; placeholder here
+    return AxisLabelResult(axes=axes, shape=tuple(), notes=" ".join(notes).strip())
+
+
+def _default_axes_json_path(video_path: Path) -> Path:
+    # Example: movie.tif -> movie.croparray_axes.json
+    return video_path.with_suffix(video_path.suffix + ".croparray_axes.json")
+
+
+def _read_video_shape_fast(path: Path) -> Tuple[int, ...]:
+    """
+    Attempt to read shape without loading the full array.
+    Uses tifffile if available; falls back to loading.
+    """
+    try:
+        import tifffile
+        with tifffile.TiffFile(str(path)) as tf:
+            # Most stacks: first series is correct
+            shape = tf.series[0].shape
+            return tuple(int(s) for s in shape)
+    except Exception:
+        # Fallback: load array (may be heavy)
+        from tifffile import imread
+        arr = imread(str(path))
+        return tuple(int(s) for s in arr.shape)
+
+
+def _load_axes_json(json_path: Path) -> Optional[dict]:
+    if not json_path.exists():
+        return None
+    try:
+        with json_path.open("r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_axes_json(json_path: Path, payload: dict) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    with json_path.open("w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def define_video_axes(
+    *,
+    path: Union[str, Path],
+    axes_json: Optional[Union[str, Path]] = None,
+    block: bool = True,
+) -> AxisLabelResult:
+    """
+    Lightweight axis labeler (no napari):
+
+    - shows the video path + detected shape
+    - provides one dropdown per dimension
+    - loads a saved json (if present) to pre-populate
+    - Save button writes json next to the video by default
+    - Accept returns AxisLabelResult usable by build.standardize_video_axes
+
+    Returns AxisLabelResult where `.axes` describes the CURRENT order of the raw video.
+    """
+    video_path = Path(path)
+    if not video_path.exists():
+        raise FileNotFoundError(video_path)
+
+    shape = _read_video_shape_fast(video_path)
+    ndim = len(shape)
+
+    json_path = Path(axes_json) if axes_json is not None else _default_axes_json_path(video_path)
+
+    # defaults
+    guess = _guess_axes_from_shape(shape)
+
+    # load previous if exists and shape matches (or user allows reuse)
+    saved = _load_axes_json(json_path)
+    saved_labels = None
+    if saved and isinstance(saved.get("labels"), list):
+        if tuple(saved.get("shape", ())) == tuple(shape):
+            saved_labels = saved["labels"]
+
+    # state holders
     accepted = {"done": False}
     canceled = {"done": False}
     result_holder = {"result": None}
 
-    def _on_close(event=None):
-        # Viewer was closed without Accept
-        if not accepted["done"]:
-            canceled["done"] = True
+    # ---- widgets ----
+    w_path = FileEdit(value=str(video_path), mode="r")
+    w_shape = Label(value=f"shape = {shape}  (ndim={ndim})")
+    w_json = FileEdit(value=str(json_path), mode="w")
+    w_reuse_even_if_shape_diff = CheckBox(
+        value=False,
+        text="Allow loading saved labels even if shape differs (not recommended)",
+    )
 
-    # This works across napari versions:
-    viewer.window._qt_window.destroyed.connect(lambda *args: _on_close())
-
-    # Build a magicgui widget with one dropdown per dim
-    # We create fields dynamically, but magicgui wants static signatures.
-    # So we generate a function with *args-like parameters via closure:
-
-    def _validate_and_make_axes(labels: List[str]) -> AxisLabelResult:
-        # Normalize "(none)" -> None
-        labels_norm = [None if lab == "(none)" else lab for lab in labels]
-
-        # Required: y and x must be present exactly once
-        for req in ("y", "x"):
-            if labels_norm.count(req) != 1:
-                raise ValueError(f"Axis '{req}' must be selected exactly once.")
-
-        # Optional: ch/z/f/fov can be absent or present once
-        for opt in ("ch", "z", "f", "fov"):
-            if labels_norm.count(opt) > 1:
-                raise ValueError(f"Axis '{opt}' can be selected at most once.")
-
-        # If ch absent, we assume ch=1 later in standardization step
-        # Same for z/f/fov depending on your standardizer’s behavior.
-        axes = tuple(lab for lab in labels_norm if lab is not None)
-
-        notes = []
-        if labels_norm.count("ch") == 0:
-            notes.append("No channel axis selected; you’ll probably want to treat ch as singleton.")
-        if labels_norm.count("z") == 0:
-            notes.append("No z axis selected; z will be treated as singleton.")
-        if labels_norm.count("f") == 0:
-            notes.append("No time/frame axis selected; f will be treated as singleton.")
-        if labels_norm.count("fov") == 0:
-            notes.append("No fov axis selected; fov will be treated as singleton.")
-
-        return AxisLabelResult(axes=axes, shape=shape, notes=" ".join(notes).strip())
-
-    # We’ll implement dropdowns as separate widgets and a single accept button.
-    dropdowns = []
+    dropdowns: List[ComboBox] = []
     for d in range(ndim):
-        w = magicgui(
-            lambda axis="(none)": axis,
-            axis={"choices": AXIS_CHOICES, "value": guess[d]},
-            call_button=False,
-        )
-        w.name = f"dim{d}_size{shape[d]}"
-        dropdowns.append(w)
+        init = guess[d]
+        if saved_labels and d < len(saved_labels):
+            init = saved_labels[d]
+        cb = ComboBox(choices=AXIS_CHOICES, value=init, label=f"dim {d} (size {shape[d]})")
+        dropdowns.append(cb)
 
-    @magicgui(call_button="Accept")
-    def accept():
-        labels = [w.axis.value for w in dropdowns]
+    msg = Label(value="")
+    msg.native.setWordWrap(True)
+    msg.native.setMaximumWidth(500)  # adjust as you like
+
+
+    btn_load = PushButton(text="Load saved labels")
+    btn_guess = PushButton(text="Reset to guess")
+    btn_save = PushButton(text="Save labels")
+    btn_accept = PushButton(text="Accept")
+    btn_cancel = PushButton(text="Cancel")
+
+    def _set_message(text: str, error: bool = False) -> None:
+        msg.value = ("❌ " if error else "✅ ") + text
+
+    def _current_labels() -> List[str]:
+        return [cb.value for cb in dropdowns]
+
+    def _apply_labels(labels: List[str]) -> None:
+        for cb, lab in zip(dropdowns, labels):
+            if lab in AXIS_CHOICES:
+                cb.value = lab
+
+    def _load_clicked():
+        jp = Path(w_json.value)
+        payload = _load_axes_json(jp)
+        if not payload:
+            _set_message(f"No readable labels file: {jp}", error=True)
+            return
+        labels = payload.get("labels", None)
+        shp = tuple(payload.get("shape", ()))
+        if not isinstance(labels, list):
+            _set_message(f"Malformed labels in {jp}", error=True)
+            return
+        if shp != shape and not w_reuse_even_if_shape_diff.value:
+            _set_message(
+                f"Saved shape {shp} != current shape {shape}. "
+                "Enable reuse checkbox to force load.",
+                error=True,
+            )
+            return
+        _apply_labels(labels)
+        _set_message(f"Loaded labels from {jp}")
+
+    def _guess_clicked():
+        _apply_labels(_guess_axes_from_shape(shape))
+        _set_message("Reset to heuristic guess")
+
+    def _save_clicked():
+        jp = Path(w_json.value)
+        labels = _current_labels()
+        payload = {
+            "version": 1,
+            "video": str(video_path),
+            "shape": list(shape),
+            "labels": labels,                 # includes "(none)" entries, length == ndim
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _save_axes_json(jp, payload)
+        _set_message(f"Saved labels to {jp}")
+
+    def _accept_clicked():
+        labels = _current_labels()
         try:
-            res = _validate_and_make_axes(labels)
+            tmp = _validate_axes_labels(labels)
         except Exception as e:
-            # show error in napari notifications
-            viewer.status = f"Axis label error: {e}"
-            napari.utils.notifications.show_error(str(e))
+            _set_message(str(e), error=True)
             return
 
-        result_holder["result"] = res
+        # fill in shape
+        result_holder["result"] = AxisLabelResult(axes=tmp.axes, shape=shape, notes=tmp.notes)
         accepted["done"] = True
+        # close container window (handled below)
+        container.close()
 
-        # IMPORTANT: close viewer AFTER magicgui finishes its internal button bookkeeping
-        QTimer.singleShot(0, viewer.close)
+    def _cancel_clicked():
+        canceled["done"] = True
+        container.close()
 
-    @magicgui(call_button="Print current labels")
-    def print_labels():
-        labels = [w.axis.value for w in dropdowns]
-        msg = " | ".join([f"dim{d}={shape[d]}→{lab}" for d, lab in enumerate(labels)])
-        napari.utils.notifications.show_info(msg)
+    btn_load.changed.connect(lambda _: _load_clicked())
+    btn_guess.changed.connect(lambda _: _guess_clicked())
+    btn_save.changed.connect(lambda _: _save_clicked())
+    btn_accept.changed.connect(lambda _: _accept_clicked())
+    btn_cancel.changed.connect(lambda _: _cancel_clicked())
 
-    # Add widgets to viewer
-    for d, w in enumerate(dropdowns):
-        w.native.setToolTip(f"Label dimension {d} (size {shape[d]})")
-        viewer.window.add_dock_widget(w, area="right")
-    viewer.window.add_dock_widget(print_labels, area="right")
-    viewer.window.add_dock_widget(accept, area="right")
+    container = Container(
+        widgets=[
+            Label(value="croparray: label video axes"),
+            Label(value="Video file:"),
+            w_path,
+            w_shape,
+            Label(value="Axes labels file (json):"),
+            w_json,
+            w_reuse_even_if_shape_diff,
+            Label(value="Assign each dimension:"),
+            *dropdowns,
+            Container(widgets=[btn_load, btn_guess, btn_save], layout="horizontal"),
+            Container(widgets=[btn_accept, btn_cancel], layout="horizontal"),
+            msg,
+        ],
+        layout="vertical",
+    )
+
+    # show window
+    container.show()
 
     if block:
-        viewer.show()
-
         app = QApplication.instance()
         if app is None:
             raise RuntimeError("No Qt application instance found.")
-
         while not accepted["done"] and not canceled["done"]:
             app.processEvents()
-            time.sleep(0.01)  # prevent CPU spin
+            time.sleep(0.01)
 
     if accepted["done"] and result_holder["result"] is not None:
         return result_holder["result"]
 
-    raise RuntimeError("Axis labeling canceled (viewer closed without Accept).")
-
+    raise RuntimeError("Axis labeling canceled.")
