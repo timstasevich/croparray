@@ -1,91 +1,46 @@
 import numpy as np
 import xarray as xr
 
-
 def _create_crop_array_dataset(video, df, **kwargs):
     """
     Creates a crop x-array from a tif video and a dataframe containing the ids and coordinates of spots of interest.
-    Cropping is only performed in the lateral xy-plane (so each crop has all z-slices in the video). Padding in the
-    xy-plane by zeros is added to create crops for spots that are too close to the edge of the video.
+
+    Cropping is always performed in the lateral xy-plane. Cropping in z is optional:
+      - If df contains a 'zc' column, crops are extracted as a z-slab of thickness (2*z_pad+1)
+        centered on zc (rounded to nearest integer pixel index), with zero-padding at z-edges.
+      - If df does not contain 'zc', all z-slices are retained (legacy behavior).
+
+    The dataframe is assumed to contain pixel coordinates (floats allowed) for xc/yc and optional zc.
+    These are rounded to the nearest integer pixel index for indexing into the numpy video array.
 
     Parameters
     ----------
-    video: numpy array
-        A 6D numpy array with intensity information from a tif video. The dimensions of the numpy array must be ordered
-        (fov, f, z, y, x, ch), where fov = field of view, f = frame, z = axial z-coordinate, y = lateral y-coordinate,
-        x = lateral x-coordinate, and ch = channels. Note any dimension can have length one (eg. single fov videos would
-        have an fov dimension of length one or a single channel video would have a ch dimension of length one).
+    video : numpy array
+        6D array ordered (fov, f, z, y, x, ch)
 
-    df: pandas dataframe
-        A dataframe with the ids and coordinates of selected spots for making crops from video. Minimally, the dataframe
-        must have columns: (1) 'fov': the fov number for each spot; can also be a filename for each fov. (2) 'id': the
-        integer id of each spot (if missing, it will be generated). (3) 'f': integer frame number of each spot starting
-        from zero. (4) 'yc': the lateral y-coordinate of the spot for centering the crop in y, (5) 'xc': the lateral
-        x-coordinate of the spot for centering the crop in x. An optional 'track_id' column assigns track membership for
-        each spot (-1 indicates untracked). An optional 'zc' column specifies the axial z-index (pixel index into z) for
-        each spot and frame; if present it is copied to all channels. Any additional columns must be numeric and will be
-        automatically converted to individual x-arrays in the crop array dataset that have the column header as a name.
+    df : pandas dataframe
+        Required columns: 'fov','f','yc','xc'
+        Optional: 'zc' (pixel z-index; float allowed), 'track_id'
 
-    xy_pad: int, optional
-        The amount of pixels to pad the centered pixel for each crop in the lateral x and y directions. Note the centered
-        pixel is defined as the pixel containing the coordinates (xc, yc) for each crop. As an example, if xy_pad = 5,
-        then each crop in the crop array will have x and y dimensions of 11 = 2*xy_pad + 1.
-
-    dx: int, optional
-        The size of pixels in the x-direction.
-    dy: int, optional
-        The size of pixels in the y-direction.
-    dz: int, optional
-        The size of pixels in the z-direction.
-    dt: int, optional
-        The time between sequential frames in the video.
-
-    video_filename: str, optional
-        The name of the tif video file.
-    video_date: str, optional
-        The date the video was acquired, in the form 'yyyy-mm-dd'.
-
-    homography: numpy array, optional
-        A list of 3x3 transformation matrices, one for each channel. This is to correct for any misalignments between
-        channels. If a channel is not be adjusted, the unit 3 x 3 matrix can be used.
+    kwargs
+    ------
+    xy_pad : int, default=5
+    z_pad  : int, default=0
+        Half-width in z (in planes) when zc is provided. Crop depth = 2*z_pad+1.
+        Ignored if df has no zc column.
+    dx, dy, dz, dt : floats
+        Metadata for coordinates (does not affect indexing here).
+    homography : list of 3x3 matrices (per channel), optional
+        Applied to (xc,yc) only (never to zc).
 
     Returns
-    ---------
-    A crop x-array dataset ds (i.e. crop array).
-
-    Coordinates of x-array dataset: fov, n, t, z, y, x, ch
-        fov = [0, 1, ... n_fov]
-        n = [0, 1, ... n_crops]
-        t = [0, 1, ... n_frames] dt
-        z = [0, 1, ... z_slices] dz
-        y = [-xy_pad, ... xy_pad] dy
-        x = [-xy_pad, ... xy_pad] dx
-        ch = [0, 1, ... n_channels]
-
-    Attributes of dataset: name, date
-
-    X-arrays in dataset:
-    1. ds.int -- dims: (fov, n, t, z, y, x, ch); attributes: 'units'; int32
-        Intensities of all crops in the crop array.
-    2. ds.id -- dims: (fov, n, t); int64
-        Spot id for each crop.
-    3. ds.track_id -- dims: (fov, n, t); int16
-        Track assignment for each spot. -1 indicates untracked.
-    4. ds.xc -- dims: (fov, n, t, ch); int16
-        Crop center x for each channel (after homography correction and padding offset).
-    5. ds.yc -- dims: (fov, n, t, ch); int16
-        Crop center y for each channel (after homography correction and padding offset).
-    6. ds.zc -- dims: (fov, n, t, ch); int16
-        Crop center z-index (pixel index into z). If not provided, set to -1. If provided as a single column in df, it is
-        copied to all channels.
-    7. ds.xy_pad -- dims: (); int
-        xy padding used to build crops.
-    8. ds.dt, ds.dz, ds.dy, ds.dx -- dims: (); float
-        Temporal and spatial resolutions.
-    9. Additional numeric columns in df become layers with dims (fov, n, t).
+    -------
+    ds : xarray.Dataset
+        Contains int, xc, yc, zc (per-channel), dx,dy,dz,dt,xy_pad, and any extra numeric df columns as (fov,n,t).
     """
-    # Get the optional key word arguments (kwargs):
     xy_pad = kwargs.get("xy_pad", 5)
+    z_pad = kwargs.get("z_pad", 0)
+
     my_dx = kwargs.get("dx", 1)
     my_dy = kwargs.get("dy", 1)
     my_dz = kwargs.get("dz", 1)
@@ -94,9 +49,6 @@ def _create_crop_array_dataset(video, df, **kwargs):
     name = kwargs.get("name", "video_filename")
     date = kwargs.get("date", "video_date")
 
-    # ----------------------------
-    # Enforce schema: id / track_id / zc
-    # ----------------------------
     df = df.copy()
 
     required = ["fov", "f", "yc", "xc"]
@@ -104,12 +56,12 @@ def _create_crop_array_dataset(video, df, **kwargs):
     if missing:
         raise ValueError(f"df is missing required columns: {missing}. Required: {required}")
 
-    # Ensure spot id exists
+    # id
     if "id" not in df.columns:
         df["id"] = np.arange(len(df), dtype=np.int64)
     df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(-1).astype(np.int64)
 
-    # Ensure track_id exists
+    # track_id
     if "track_id" in df.columns:
         df["track_id"] = (
             pd.to_numeric(df["track_id"], errors="coerce")
@@ -119,60 +71,63 @@ def _create_crop_array_dataset(video, df, **kwargs):
     else:
         df["track_id"] = np.int16(-1)
 
-    # Ensure zc exists in df as a single scalar per (spot, frame); will be broadcast to all channels in ds
-    if "zc" in df.columns:
-        df["zc"] = (
-            pd.to_numeric(df["zc"], errors="coerce")
-            .round()
-            .fillna(-1)
-            .astype(np.int16)
-        )
-    else:
-        df["zc"] = np.int16(-1)
-
-    # Normalize key columns
+    # normalize frame index
     df["f"] = pd.to_numeric(df["f"], errors="coerce").fillna(0).astype(np.int32)
+
+    # xc/yc are pixel coords (floats OK)
     df["xc"] = pd.to_numeric(df["xc"], errors="coerce")
     df["yc"] = pd.to_numeric(df["yc"], errors="coerce")
 
-    # Get dimensions of video
+    # Optional zc: pixel z-index (floats OK); if absent, legacy behavior (all z)
+    has_zc = "zc" in df.columns
+    if has_zc:
+        df["zc"] = pd.to_numeric(df["zc"], errors="coerce")
+    else:
+        df["zc"] = np.nan  # sentinel for "not provided"
+
+    # Video dims
     n_fov, n_frames, z_slices, height_y, width_x, n_channels = list(video.shape)
     print("Original video dimensions: ", video.shape)
 
-    # Get homography matrix; default is identity per channel
     homography = kwargs.get("homography", [np.eye(3) for _ in np.arange(n_channels)])
 
-    # Pad video in xy-lateral direction by xy_pad so crops can be made for all spots
-    npad = ((0, 0), (0, 0), (0, 0), (xy_pad + 1, xy_pad + 1), (xy_pad + 1, xy_pad + 1), (0, 0))
+    # Pad video in xy always; pad in z only if zc is provided
+    z_pre = z_pad if has_zc else 0
+    z_post = z_pad if has_zc else 0
+    npad = (
+        (0, 0),
+        (0, 0),
+        (z_pre, z_post),
+        (xy_pad + 1, xy_pad + 1),
+        (xy_pad + 1, xy_pad + 1),
+        (0, 0),
+    )
     video = np.pad(video, pad_width=npad, mode="constant", constant_values=0)
     print("Padded video dimensions: ", video.shape)
 
-    # Create the 'n' spot/crop counter column for indexing df by 'fov', 'n', and 'f'
+    # Make n index (spot counter per fov/frame)
     my_crops = df.groupby(["fov", "f"])
     df["n"] = my_crops.cumcount()
     n_spots_max = int(df["n"].max()) + 1 if len(df) else 0
     print("Max # of spots per frame: ", n_spots_max)
 
-    # Create empty array to hold all crops: fov, n, f, z, y, x, ch
+    # Output z depth: cropped slab if zc present, else keep all z (legacy)
+    z_depth = (2 * z_pad + 1) if has_zc else z_slices
+
+    # Allocate arrays
     my_crops_all = np.zeros(
-        (n_fov, n_spots_max, n_frames, z_slices, 2 * xy_pad + 1, 2 * xy_pad + 1, n_channels),
+        (n_fov, n_spots_max, n_frames, z_depth, 2 * xy_pad + 1, 2 * xy_pad + 1, n_channels),
         dtype=np.int32,
     )
     print("Shape of numpy array to hold all crop intensity data: ", my_crops_all.shape)
 
-    # Create arrays for xc and yc: (fov, n, f, ch)
     my_xc_all = np.zeros((n_fov, n_spots_max, n_frames, n_channels), dtype=np.int16)
     my_yc_all = np.zeros((n_fov, n_spots_max, n_frames, n_channels), dtype=np.int16)
-
-    # Create array for zc: (fov, n, f, ch) (broadcasted across channels)
     my_zc_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
 
-    # Create arrays to hold id/track_id and any other extra numeric columns in df -> dims (fov, n, f)
-    # Exclude df columns that are used as coordinates or handled separately
-    base_coord_cols = {"fov", "f", "yc", "xc", "n", "zc"}
+    # Extra numeric columns become layers (fov,n,t) excluding coords/handled cols
+    base_coord_cols = {"fov", "f", "yc", "xc", "zc", "n"}
     my_columns = [c for c in df.columns if c not in base_coord_cols]
-
-    # Ensure id/track_id are present as layers even if user didn't provide them
     for required_layer in ("id", "track_id"):
         if required_layer not in my_columns:
             my_columns.append(required_layer)
@@ -180,33 +135,41 @@ def _create_crop_array_dataset(video, df, **kwargs):
     my_layers = np.zeros((len(my_columns), n_fov, n_spots_max, n_frames), dtype=np.int16)
     print("Shape of extra my_layers numpy array: ", my_layers.shape)
 
-    # Assign crops to arrays defined above
+    # Fill arrays
     my_fov_ind = 0
     for my_fov in df["fov"].unique():
-        for my_f in np.sort(df["f"].unique()):  # frames MUST be integers counting from 0
+        for my_f in np.sort(df["f"].unique()):
             my_spots = df[(df["f"] == my_f) & (df["fov"] == my_fov)]
-            my_ns = my_spots["n"].values.astype(int)  # preserves order
+            my_ns = my_spots["n"].values.astype(int)
 
-            # Fill scalar layers (id/track_id and other numeric columns)
+            # Fill scalar layers
             for col_counter, col in enumerate(my_columns):
                 vals = pd.to_numeric(my_spots[col].values, errors="coerce")
-
-                # Do not round ids/indices
                 if col not in ("id", "track_id"):
                     vals = np.round(vals)
-
                 vals = vals.fillna(-1).astype(np.int16).values
                 my_layers[col_counter, my_fov_ind, : len(vals), int(my_f)] = vals
 
-            # Fill zc per channel by broadcasting df['zc']
-            zc_vals = my_spots["zc"].astype(np.int16).values
-            for ch_i in range(n_channels):
-                my_zc_all[my_fov_ind, : len(zc_vals), int(my_f), ch_i] = zc_vals
+            # Prepare per-spot zc indexer if present
+            if has_zc:
+                # round to nearest integer pixel index, like xc/yc
+                zc_vals = np.round(my_spots["zc"].values).astype(np.float64)
+                zc_vals = np.where(np.isfinite(zc_vals), zc_vals, -1)
+                zc_vals = zc_vals.astype(np.int16)
 
-            # Correct (x,y) coordinates of all crops at my_f and my_fov using homography matrix
+                # shift into padded video z coordinates
+                zc_vals_padded = (zc_vals + z_pre).astype(np.int16)
+
+                # broadcast to all channels in ds
+                for ch_i in range(n_channels):
+                    my_zc_all[my_fov_ind, : len(zc_vals), int(my_f), ch_i] = zc_vals_padded
+            else:
+                zc_vals = None
+                zc_vals_padded = None
+
+            # Homography-correct xy coordinates per channel (no scaling, just transform + padding offset)
             my_x = np.zeros((n_channels, len(my_ns)), dtype=np.int16)
             my_y = np.zeros((n_channels, len(my_ns)), dtype=np.int16)
-
             for ch_i in range(n_channels):
                 if len(my_spots) > 0:
                     temp = [
@@ -217,31 +180,66 @@ def _create_crop_array_dataset(video, df, **kwargs):
                     my_x[ch_i] = (my_x[ch_i] + xy_pad + 1).round(0).astype(np.int16)
                     my_y[ch_i] = (my_y[ch_i] + xy_pad + 1).round(0).astype(np.int16)
 
+            # Extract crops
             for i in my_ns:
                 for ch_i in range(n_channels):
-                    my_crops_all[my_fov_ind, i, int(my_f), :, :, :, ch_i] = video[
-                        my_fov_ind,
-                        int(my_f),
-                        :,
-                        int(my_y[ch_i, i]) - xy_pad : int(my_y[ch_i, i]) + xy_pad + 1,
-                        int(my_x[ch_i, i]) - xy_pad : int(my_x[ch_i, i]) + xy_pad + 1,
-                        ch_i,
-                    ]
+                    if has_zc:
+                        # If zc unknown (-1), leave zeros
+                        if int(zc_vals[i]) < 0:
+                            continue
+                        zc_center = int(zc_vals_padded[i])
+                        z0 = zc_center - z_pad
+                        z1 = zc_center + z_pad + 1  # exclusive
+                        my_crops_all[my_fov_ind, i, int(my_f), :, :, :, ch_i] = video[
+                            my_fov_ind,
+                            int(my_f),
+                            z0:z1,
+                            int(my_y[ch_i, i]) - xy_pad : int(my_y[ch_i, i]) + xy_pad + 1,
+                            int(my_x[ch_i, i]) - xy_pad : int(my_x[ch_i, i]) + xy_pad + 1,
+                            ch_i,
+                        ]
+                    else:
+                        # legacy: keep all z planes
+                        my_crops_all[my_fov_ind, i, int(my_f), :, :, :, ch_i] = video[
+                            my_fov_ind,
+                            int(my_f),
+                            :z_slices,
+                            int(my_y[ch_i, i]) - xy_pad : int(my_y[ch_i, i]) + xy_pad + 1,
+                            int(my_x[ch_i, i]) - xy_pad : int(my_x[ch_i, i]) + xy_pad + 1,
+                            ch_i,
+                        ]
+
                     my_xc_all[my_fov_ind, i, int(my_f), ch_i] = my_x[ch_i, i]
                     my_yc_all[my_fov_ind, i, int(my_f), ch_i] = my_y[ch_i, i]
 
         my_fov_ind += 1
 
-    # Create coordinates
+    # Coordinates
     n = xr.DataArray(np.arange(n_spots_max).astype(np.int16), attrs={"long_name": "crop count"})
     t = xr.DataArray(np.arange(n_frames) * my_dt, attrs={"units": units[1], "long_name": "time"})
-    z = xr.DataArray(np.arange(z_slices) * my_dz, attrs={"units": units[0], "long_name": "axial z-distance"})
-    y = xr.DataArray(np.arange(-xy_pad, xy_pad + 1) * my_dy, attrs={"units": units[0], "long_name": "radial y-distance"})
-    x = xr.DataArray(np.arange(-xy_pad, xy_pad + 1) * my_dx, attrs={"units": units[0], "long_name": "radial x-distance"})
+
+    if has_zc:
+        z = xr.DataArray(
+            np.arange(-z_pad, z_pad + 1) * my_dz,
+            attrs={"units": units[0], "long_name": "axial z-distance (relative)"},
+        )
+    else:
+        z = xr.DataArray(
+            np.arange(z_slices) * my_dz,
+            attrs={"units": units[0], "long_name": "axial z-distance"},
+        )
+
+    y = xr.DataArray(
+        np.arange(-xy_pad, xy_pad + 1) * my_dy,
+        attrs={"units": units[0], "long_name": "radial y-distance"},
+    )
+    x = xr.DataArray(
+        np.arange(-xy_pad, xy_pad + 1) * my_dx,
+        attrs={"units": units[0], "long_name": "radial x-distance"},
+    )
     ch = np.arange(n_channels)
     fov = np.arange(n_fov)
 
-    # Create x-array variables/layers
     dx = xr.DataArray(my_dx, coords=[], dims=[], attrs={"units": units[0], "long_name": "x-resolution"})
     dy = xr.DataArray(my_dy, coords=[], dims=[], attrs={"units": units[0], "long_name": "y-resolution"})
     dz = xr.DataArray(my_dz, coords=[], dims=[], attrs={"units": units[0], "long_name": "z-resolution"})
@@ -273,20 +271,17 @@ def _create_crop_array_dataset(video, df, **kwargs):
         attrs={"units": "pixels", "long_name": "crop center z (-1 = unknown)"},
     )
 
-    # Optional layers from df columns (dims fov, n, t)
     optional_layers = [
         xr.DataArray(my_layers[i].astype(np.int16), coords=[fov, n, t], dims=["fov", "n", "t"])
         for i in range(len(my_columns))
     ]
     dict1 = dict(zip(my_columns, optional_layers))
 
-    # Annotate common layers
     if "id" in dict1:
         dict1["id"].attrs.update({"units": "index", "long_name": "spot id"})
     if "track_id" in dict1:
         dict1["track_id"].attrs.update({"units": "index", "long_name": "track assignment (-1 = untracked)"})
 
-    # Assemble dataset
     ds = xr.Dataset(
         {
             "int": intensity,
@@ -303,7 +298,6 @@ def _create_crop_array_dataset(video, df, **kwargs):
         attrs={"name": name, "date": date},
     )
     return ds
-
 
 # def _create_crop_array_dataset(video, df, **kwargs): 
 #     """
