@@ -1,6 +1,77 @@
+# croparray/build.py  
+
+from __future__ import annotations
+
+
+from typing import Optional, Sequence, Tuple
 import numpy as np
 import xarray as xr
 import pandas as pd
+
+try:
+    __all__
+except NameError:
+    __all__ = []
+__all__ += ["standardize_video_axes"]
+
+_CANONICAL = ("fov", "f", "z", "y", "x", "ch")
+
+def _norm_axis(a: str) -> str:
+    a = a.strip().lower()
+    if a in ("t", "time", "frame", "frames"):
+        return "f"
+    if a in ("c", "chan", "channel", "channels"):
+        return "ch"
+    if a in ("pos", "position"):
+        return "fov"
+    if a in ("slice", "plane"):
+        return "z"
+    return a
+
+def standardize_video_axes(
+    video: np.ndarray,
+    axes: Sequence[str],
+    *,
+    add_missing_singletons: bool = True,
+) -> np.ndarray:
+    """
+    Reorder raw video into croparray canonical order: (fov, f, z, y, x, ch).
+
+    `axes` must describe the CURRENT order of `video`, e.g. res.axes from ca.gui.label_video_axes().
+    """
+    video = np.asarray(video)
+    axes = tuple(_norm_axis(a) for a in axes)
+
+    if video.ndim != len(axes):
+        raise ValueError(f"video.ndim={video.ndim} but len(axes)={len(axes)}")
+
+    # y/x required
+    for req in ("y", "x"):
+        if axes.count(req) != 1:
+            raise ValueError(f"Axis '{req}' must be present exactly once. Got axes={axes}")
+
+    # optional axes unique
+    for opt in ("fov", "f", "z", "ch"):
+        if axes.count(opt) > 1:
+            raise ValueError(f"Axis '{opt}' can appear at most once. Got axes={axes}")
+
+    video2 = video
+    axes2 = list(axes)
+
+    if add_missing_singletons:
+        # add missing optional dims as singleton at end
+        for opt in ("fov", "f", "z", "ch"):
+            if opt not in axes2:
+                video2 = np.expand_dims(video2, axis=-1)
+                axes2.append(opt)
+
+    missing = [ax for ax in _CANONICAL if ax not in axes2]
+    if missing:
+        raise ValueError(f"Missing axes {missing} after normalization. Got axes={axes2}")
+
+    perm = [axes2.index(ax) for ax in _CANONICAL]
+    return np.transpose(video2, axes=perm)
+
 
 def _create_crop_array_dataset(video, df, **kwargs):
     """
@@ -663,28 +734,47 @@ def _create_crop_array_dataset(video, df, **kwargs):
 #     attrs = {'name': name, 'date': date}
 #     )
 #     return ds
-    
 
-def create_crop_array(video, df, as_object: bool = True, **kwargs):
+
+
+
+def create_crop_array(
+    video,
+    df,
+    *,
+    axes: Optional[Sequence[str]] = None,
+    as_object: bool = True,
+    **kwargs,
+):
     """
     Build a crop-array from raw inputs.
 
     Parameters
     ----------
     video
-        Input video array.
+        Input video array. If `axes` is None, this must already be ordered
+        (fov, f, z, y, x, ch). If `axes` is provided, `video` may be in any
+        order described by `axes` (e.g. from `ca.gui.label_video_axes(...).axes`).
     df
         Spot / crop definition table.
+    axes : sequence of str, optional
+        Axis labels describing the CURRENT order of `video`.
+        If provided, `video` will be reordered into croparray canonical order:
+        (fov, f, z, y, x, ch) via `standardize_video_axes(video, axes)`.
+        Accepted labels: fov, f, z, y, x, ch (synonyms: t->f, c->ch).
     as_object : bool, default True
         If True, return a CropArray wrapper (method-style API).
         If False, return the raw xarray.Dataset (legacy behavior).
     **kwargs
-        Passed through to the dataset construction logic.
+        Passed through to `_create_crop_array_dataset`.
 
     Returns
     -------
     CropArray or xarray.Dataset
     """
+    if axes is not None:
+        video = standardize_video_axes(np.asarray(video), axes)
+
     ds = _create_crop_array_dataset(video, df, **kwargs)
 
     if as_object:
@@ -693,3 +783,42 @@ def create_crop_array(video, df, as_object: bool = True, **kwargs):
         return CropArray(ds)
 
     return ds
+
+# def create_crop_array(video, df, as_object: bool = True, **kwargs):
+#     """
+#     Build a crop-array from raw inputs.
+
+#     Parameters
+#     ----------
+#     video
+#         Input video array.
+#     df
+#         Spot / crop definition table.
+#     as_object : bool, default True
+#         If True, return a CropArray wrapper (method-style API).
+#         If False, return the raw xarray.Dataset (legacy behavior).
+#     **kwargs
+#         Passed through to the dataset construction logic.
+
+#     Returns
+#     -------
+#     CropArray or xarray.Dataset
+#     """
+#     ds = _create_crop_array_dataset(video, df, **kwargs)
+
+#     if as_object:
+#         # Local import avoids circular dependency
+#         from .crop_array_object import CropArray
+#         return CropArray(ds)
+
+#     return ds
+
+# ============================================================
+# Append detailed dataset-builder docs to the public wrapper
+# ============================================================
+if _create_crop_array_dataset.__doc__:
+    create_crop_array.__doc__ = (
+        (create_crop_array.__doc__ or "")
+        + "\n\n---\n\n"
+        + _create_crop_array_dataset.__doc__
+    )

@@ -15,6 +15,8 @@ from .crop_array_tools import concat
 
 # Functional / tools API (explicitly attached)
 from . import crop_array_tools
+from . import gui
+from . import build
 
 # Short alias for functional tools (preferred over top-level forwarding)
 tools = crop_array_tools
@@ -33,6 +35,8 @@ __all__ = [
     "open_croparray_zarr",
     "crop_array_tools",
     "tools",
+    "gui",
+    "build"
 ]
 
 # ---------------------------------------------------------------------
