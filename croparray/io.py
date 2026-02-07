@@ -148,7 +148,7 @@ def open_as_trackarray(
     # Always open as CropArray internally
     ca = open_croparray(path, as_object=True, **kwargs)
 
-    ca = open_croparray(fn, as_object=True)
+#    ca = open_croparray(fn, as_object=True)
 
     # --- backward-compat / schema guard ---
     if "track_id" not in ca.ds:

@@ -3,35 +3,34 @@ import pandas as pd
 import xarray as xr
 import itertools
 
-# Make track_id dimension in crop array (that has been tracked)
 def track_array_single(ca, as_object: bool = False):
     """
-    Track IDs live in ca['track_id']
-    id is preserved as spot ID
-    -1 means untracked
+    Build a TrackArray by grouping a CropArray (or xarray.Dataset) on ca['track_id'].
 
-    Parameters
-    ----------
-    ca : xarray.Dataset
-        Crop-array dataset that contains an `id` variable with per-(fov,n,t,...) track IDs.
+    Important:
+    - In the crop array, 'track_id' exists as a (fov,n,t) layer.
+    - In the track array, we need 'track_id' to become a *dimension*.
+      Therefore, we MUST remove any existing variable/coord named 'track_id'
+      from the per-track datasets before xr.concat(..., dim='track_id').
 
-    Returns
-    -------
-    xarray.Dataset
-        Track-array dataset with dimension `track_id` and (typically) `fov`
-        as a real dimension. Variables are aligned across tracks with fill_value=0.
+    Notes:
+    - 'id' is preserved as spot/detection identity (fov,n,t) -> becomes (track_id,t) after grouping.
+    - -1 indicates untracked (ignored here).
     """
     # Accept either CropArray object or raw xarray.Dataset
-    if hasattr(ca, "ds"):  # CropArray wrapper
+    if hasattr(ca, "ds"):
         ca = ca.ds
 
-    # my_ids = np.unique(ca["id"].values)
-    # my_ids = my_ids[pd.notnull(my_ids)]
-    # my_ids = my_ids[my_ids != 0]
+    if "track_id" not in ca:
+        raise ValueError("track_array_single requires ca to contain a 'track_id' layer.")
+
+    # If track_id accidentally exists as a coordinate, convert it back to a data_var
+    if "track_id" in ca.coords and "track_id" not in ca.data_vars:
+        ca = ca.reset_coords("track_id")
+
     my_ids = np.unique(ca["track_id"].values)
     my_ids = my_ids[pd.notnull(my_ids)]
     my_ids = my_ids[my_ids >= 0]
-
 
     if len(my_ids) == 0:
         empty = xr.Dataset()
@@ -43,6 +42,7 @@ def track_array_single(ca, as_object: bool = False):
     my_das = []
     for tid in my_ids:
         g = ca.groupby("track_id")[tid]
+
         stacked_dim = next((d for d in g.dims if d.startswith("stacked_")), None)
         if stacked_dim is None:
             raise ValueError("Could not find stacked dimension created by groupby('track_id').")
@@ -50,11 +50,30 @@ def track_array_single(ca, as_object: bool = False):
         temp = (
             g.reset_index(stacked_dim)
              .sortby("t")
-             .reset_coords("n", drop=True)
-             .set_index({stacked_dim: "t"})
-             .rename({stacked_dim: "t"})
+             .drop_vars("n", errors="ignore")  # n is meaningless once we go per-track
         )
 
+        # --- CRITICAL FIX ---
+        # track_id currently exists as a (fov,n,t) layer in the CropArray.
+        # If we try to concat with dim name 'track_id' while this variable exists,
+        # xarray will raise: "track_id already exists as coordinate or variable name."
+        temp = temp.drop_vars("track_id", errors="ignore")
+        if "track_id" in temp.coords:
+            temp = temp.reset_coords("track_id", drop=True)
+
+        # enforce unique time points per track (defensive)
+        if "t" in temp:
+            t_vals = temp["t"].values
+            _, unique_idx = np.unique(t_vals, return_index=True)
+            # unique_idx is with respect to current ordering (already sorted by t)
+            temp = temp.isel({stacked_dim: np.sort(unique_idx)})
+
+        temp = (
+            temp.set_index({stacked_dim: "t"})
+                .rename({stacked_dim: "t"})
+        )
+
+        # keep fov as a real dimension, but only if single-valued
         if "fov" in temp.coords:
             fovs = np.unique(temp["fov"].values)
             if len(fovs) != 1:
@@ -72,6 +91,7 @@ def track_array_single(ca, as_object: bool = False):
         return TrackArray(my_taz)
 
     return my_taz
+
 
 
 

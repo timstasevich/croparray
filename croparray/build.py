@@ -4,43 +4,132 @@ import pandas as pd
 
 def _create_crop_array_dataset(video, df, **kwargs):
     """
-    Creates a crop x-array from a tif video and a dataframe containing the ids and coordinates of spots of interest.
+    Create a crop-array xarray.Dataset from a 6D video and a dataframe of detected spots.
 
-    Cropping is always performed in the lateral xy-plane. Cropping in z is optional:
-      - If df contains a 'zc' column, crops are extracted as a z-slab of thickness (2*z_pad+1)
-        centered on zc (rounded to nearest integer pixel index), with zero-padding at z-edges.
-      - If df does not contain 'zc', all z-slices are retained (legacy behavior).
-
-    The dataframe is assumed to contain pixel coordinates (floats allowed) for xc/yc and optional zc.
-    These are rounded to the nearest integer pixel index for indexing into the numpy video array.
+    This function extracts fixed-size crops around detected spots from a time-lapse
+    3D (z-stack) video and organizes them into a structured xarray Dataset (“crop array”).
+    Crops are always centered in the lateral (x,y) directions; axial (z) handling depends
+    on whether z positions are provided.
 
     Parameters
     ----------
-    video : numpy array
-        6D array ordered (fov, f, z, y, x, ch)
+    video : numpy.ndarray
+        A 6D numpy array containing the raw image data with dimensions ordered as:
+            (fov, f, z, y, x, ch)
 
-    df : pandas dataframe
-        Required columns: 'fov','f','yc','xc'
-        Optional: 'zc' (pixel z-index; float allowed), 'track_id'
+        where:
+            fov : field of view
+            f   : frame (time)
+            z   : axial plane index
+            y   : lateral y coordinate
+            x   : lateral x coordinate
+            ch  : imaging channel
 
-    kwargs
-    ------
-    xy_pad : int, default=5
-    z_pad  : int, default=0
-        Half-width in z (in planes) when zc is provided. Crop depth = 2*z_pad+1.
-        Ignored if df has no zc column.
-    dx, dy, dz, dt : floats
-        Metadata for coordinates (does not affect indexing here).
-    homography : list of 3x3 matrices (per channel), optional
-        Applied to (xc,yc) only (never to zc).
+    df : pandas.DataFrame
+        DataFrame describing the detected spots to be cropped. At minimum, the following
+        columns are required:
+
+            - 'fov' : field-of-view index (integer or filename-like identifier)
+            - 'f'   : frame index (integer, starting at 0)
+            - 'xc'  : x-position of the spot center in **movie pixel coordinates**
+            - 'yc'  : y-position of the spot center in **movie pixel coordinates**
+
+        Optional columns:
+
+            - 'zc' : axial (z) position of the spot center in **movie z-index units**.
+                    May be float (sub-plane precision). If provided together with
+                    `z_pad > 0`, crops will be extracted from a z-slab centered on this
+                    position.
+            - 'id' : integer spot identifier. If missing, a unique id is generated.
+            - 'track_id' : integer track identifier (-1 indicates untracked).
+            - Any additional numeric columns will be converted into per-crop xarray
+            variables with dimensions (fov, n, t).
+
+    xy_pad : int, optional
+        Number of pixels to pad on either side of the crop center in the x and y directions.
+        Each crop will have size (2*xy_pad + 1, 2*xy_pad + 1) in (y, x).
+
+    z_pad : int, optional
+        Number of z-planes to include on either side of the provided z center.
+        If `z_pad > 0` and df contains a 'zc' column, crops are extracted as a z-slab of
+        depth (2*z_pad + 1) centered on the rounded z index.
+        If `z_pad == 0` or 'zc' is not provided, all z planes are retained.
+
+    dx, dy, dz : float, optional
+        Physical size of a pixel in the x, y, and z directions, respectively.
+        These values are stored as metadata and used for coordinate construction, but do
+        not affect cropping.
+
+    dt : float, optional
+        Time interval between consecutive frames. Stored as metadata.
+
+    homography : list of numpy.ndarray, optional
+        A list of 3×3 homography matrices, one per channel, used to correct lateral (x,y)
+        misalignments between channels. Homographies are applied to the *float* (xc, yc)
+        coordinates prior to cropping.
 
     Returns
     -------
-    ds : xarray.Dataset
-        Contains int, xc, yc, zc (per-channel), dx,dy,dz,dt,xy_pad, and any extra numeric df columns as (fov,n,t).
+    xarray.Dataset
+        A crop-array dataset with coordinates:
+            - fov : field of view
+            - n   : crop index (spot counter per frame per fov)
+            - t   : time
+            - z   : axial coordinate (full stack or slab-relative)
+            - y   : lateral y coordinate (centered on 0)
+            - x   : lateral x coordinate (centered on 0)
+            - ch  : channel
+
+        Core data variables include:
+
+        1. int : (fov, n, t, z, y, x, ch)
+            Cropped intensity data.
+
+        2. xc, yc, zc : (fov, n, t, ch)
+            Global **movie-coordinate** spot positions stored as floats.
+            These are suitable for trajectory analysis, MSD calculations, and spatial
+            measurements.
+
+        3. xc_pix, yc_pix, zc_pix : (fov, n, t, ch)
+            Rounded integer pixel indices corresponding to the global positions.
+            These are used internally for indexing and cropping.
+
+        4. xc_pad, yc_pad : (fov, n, t, ch)
+            Pixel indices into the *padded* video used during crop extraction.
+
+        5. z_pos : (fov, n, t, ch)
+            Local z index into the stored z dimension used for best-z selection.
+            A value of -1 indicates an invalid or unknown z position.
+            This variable is consumed by `best_z_proj(use_z_pos=True)` and should not
+            be interpreted as a physical coordinate.
+
+        6. id : (fov, n, t)
+            Spot identifier.
+
+        7. track_id : (fov, n, t)
+            Track assignment (-1 = untracked).
+
+        Additional numeric columns in `df` are converted into per-crop variables with
+        dimensions (fov, n, t).
+
+    Notes
+    -----
+    - Global coordinates (`xc`, `yc`, `zc`) are never rounded and retain subpixel precision.
+    - Pixel index variables (`*_pix`, `*_pad`, `z_pos`) are used strictly for array indexing.
+    - When z-slab mode is active, the z coordinate of the dataset is slab-relative and
+    centered at zero; the original global z position is preserved in `zc`.
+    - Crops that cannot be extracted due to out-of-bounds coordinates remain zero-filled.
     """
-    xy_pad = kwargs.get("xy_pad", 5)
-    z_pad = kwargs.get("z_pad", 0)
+
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    # ----------------
+    # kwargs / metadata
+    # ----------------
+    xy_pad = int(kwargs.get("xy_pad", 5))
+    z_pad = int(kwargs.get("z_pad", 0))  # used only if df has zc
 
     my_dx = kwargs.get("dx", 1)
     my_dy = kwargs.get("dy", 1)
@@ -52,6 +141,9 @@ def _create_crop_array_dataset(video, df, **kwargs):
 
     df = df.copy()
 
+    # ----------------
+    # validate / schema
+    # ----------------
     required = ["fov", "f", "yc", "xc"]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -64,183 +156,230 @@ def _create_crop_array_dataset(video, df, **kwargs):
 
     # track_id
     if "track_id" in df.columns:
-        df["track_id"] = (
-            pd.to_numeric(df["track_id"], errors="coerce")
-            .fillna(-1)
-            .astype(np.int16)
-        )
+        df["track_id"] = pd.to_numeric(df["track_id"], errors="coerce").fillna(-1).astype(np.int16)
     else:
         df["track_id"] = np.int16(-1)
 
-    # normalize frame index
+    # frame
     df["f"] = pd.to_numeric(df["f"], errors="coerce").fillna(0).astype(np.int32)
 
-    # xc/yc are pixel coords (floats OK)
+    # global float coords (movie coordinates)
     df["xc"] = pd.to_numeric(df["xc"], errors="coerce")
     df["yc"] = pd.to_numeric(df["yc"], errors="coerce")
 
-    # Optional zc: pixel z-index (floats OK); if absent, legacy behavior (all z)
     has_zc = "zc" in df.columns
     if has_zc:
         df["zc"] = pd.to_numeric(df["zc"], errors="coerce")
     else:
-        df["zc"] = np.nan  # sentinel for "not provided"
+        # keep a float column for uniformity
+        df["zc"] = np.nan
 
-    # Video dims
+    # slab mode only if z_pad>0 and zc column exists
+    use_z_slab = (z_pad > 0) and has_zc
+
+    # ------------
+    # video dims
+    # ------------
     n_fov, n_frames, z_slices, height_y, width_x, n_channels = list(video.shape)
-    print("Original video dimensions: ", video.shape)
+    print("Original video dimensions:", video.shape)
 
-    homography = kwargs.get("homography", [np.eye(3) for _ in np.arange(n_channels)])
+    # homography per channel (xy only)
+    homography = kwargs.get("homography", [np.eye(3) for _ in range(n_channels)])
 
-    # Pad video in xy always; pad in z only if zc is provided
-    z_pre = z_pad if has_zc else 0
-    z_post = z_pad if has_zc else 0
-    npad = (
-        (0, 0),
-        (0, 0),
-        (z_pre, z_post),
-        (xy_pad + 1, xy_pad + 1),
-        (xy_pad + 1, xy_pad + 1),
-        (0, 0),
-    )
-    video = np.pad(video, pad_width=npad, mode="constant", constant_values=0)
-    print("Padded video dimensions: ", video.shape)
+    # pad video in xy to allow edge crops
+    npad = ((0, 0), (0, 0), (0, 0), (xy_pad + 1, xy_pad + 1), (xy_pad + 1, xy_pad + 1), (0, 0))
+    video_pad = np.pad(video, pad_width=npad, mode="constant", constant_values=0)
+    print("Padded video dimensions:", video_pad.shape)
 
-    # Make n index (spot counter per fov/frame)
-    my_crops = df.groupby(["fov", "f"])
-    df["n"] = my_crops.cumcount()
+    # -------------------------
+    # compute per-frame crop index n
+    # -------------------------
+    df["n"] = df.groupby(["fov", "f"]).cumcount()
     n_spots_max = int(df["n"].max()) + 1 if len(df) else 0
-    print("Max # of spots per frame: ", n_spots_max)
+    print("Max # of spots per frame:", n_spots_max)
 
-    # Output z depth: cropped slab if zc present, else keep all z (legacy)
-    z_depth = (2 * z_pad + 1) if has_zc else z_slices
+    # -------------------------
+    # allocate arrays
+    # -------------------------
+    z_out = (2 * z_pad + 1) if use_z_slab else z_slices
 
-    # Allocate arrays
     my_crops_all = np.zeros(
-        (n_fov, n_spots_max, n_frames, z_depth, 2 * xy_pad + 1, 2 * xy_pad + 1, n_channels),
+        (n_fov, n_spots_max, n_frames, z_out, 2 * xy_pad + 1, 2 * xy_pad + 1, n_channels),
         dtype=np.int32,
     )
-    print("Shape of numpy array to hold all crop intensity data: ", my_crops_all.shape)
 
-    my_xc_all = np.zeros((n_fov, n_spots_max, n_frames, n_channels), dtype=np.int16)
-    my_yc_all = np.zeros((n_fov, n_spots_max, n_frames, n_channels), dtype=np.int16)
-    my_zc_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+    # global (movie) float coords per channel
+    my_xc_all = np.full((n_fov, n_spots_max, n_frames, n_channels), np.nan, dtype=np.float32)
+    my_yc_all = np.full((n_fov, n_spots_max, n_frames, n_channels), np.nan, dtype=np.float32)
 
-    # Extra numeric columns become layers (fov,n,t) excluding coords/handled cols
+    # global (movie) float z coord (broadcast to all channels)
+    my_zc_all = np.full((n_fov, n_spots_max, n_frames, n_channels), np.nan, dtype=np.float32)
+
+    # pixel indices in movie coords (rounded)
+    my_xc_pix_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+    my_yc_pix_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+    my_zc_pix_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+
+    # padded xy indices for slicing the padded video
+    my_xc_pad_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+    my_yc_pad_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+
+    # local z selector for best-z selection: index into stored z dimension
+    # slab mode: z_pos = z_pad if valid; else -1
+    # full mode: can set z_pos = zc_pix if desired downstream; here we store it explicitly.
+    my_z_pos_all = np.full((n_fov, n_spots_max, n_frames, n_channels), -1, dtype=np.int16)
+
+    # -------------------------
+    # extra numeric df columns -> layers (fov,n,t)
+    # -------------------------
     base_coord_cols = {"fov", "f", "yc", "xc", "zc", "n"}
     my_columns = [c for c in df.columns if c not in base_coord_cols]
+
+    # ensure id/track_id exist as layers
     for required_layer in ("id", "track_id"):
         if required_layer not in my_columns:
             my_columns.append(required_layer)
 
     my_layers = np.zeros((len(my_columns), n_fov, n_spots_max, n_frames), dtype=np.int16)
-    print("Shape of extra my_layers numpy array: ", my_layers.shape)
+    print("Shape of extra my_layers numpy array:", my_layers.shape)
 
-    # Fill arrays
+    # -------------------------
+    # fill arrays
+    # -------------------------
     my_fov_ind = 0
     for my_fov in df["fov"].unique():
-        for my_f in np.sort(df["f"].unique()):
-            my_spots = df[(df["f"] == my_f) & (df["fov"] == my_fov)]
-            my_ns = my_spots["n"].values.astype(int)
+        df_fov = df[df["fov"] == my_fov]
+        for my_f in np.sort(df_fov["f"].unique()):
+            my_spots = df_fov[df_fov["f"] == my_f].copy()
+            if len(my_spots) == 0:
+                continue
 
-            # Fill scalar layers
+            my_ns = my_spots["n"].to_numpy(dtype=int)
+
+            # fill scalar layers (id/track_id and other numeric columns)
             for col_counter, col in enumerate(my_columns):
-                vals = pd.to_numeric(my_spots[col].values, errors="coerce")
+                vals = pd.to_numeric(my_spots[col], errors="coerce")
                 if col not in ("id", "track_id"):
-                    vals = np.round(vals)
-                vals = vals.fillna(-1).astype(np.int16).values
+                    vals = vals.round()
+                vals = vals.fillna(-1).astype(np.int16).to_numpy()
                 my_layers[col_counter, my_fov_ind, : len(vals), int(my_f)] = vals
 
-            # Prepare per-spot zc indexer if present
-            if has_zc:
-                # round to nearest integer pixel index, like xc/yc
-                zc_vals = np.round(my_spots["zc"].values).astype(np.float64)
-                zc_vals = np.where(np.isfinite(zc_vals), zc_vals, -1)
-                zc_vals = zc_vals.astype(np.int16)
+            # z global float and z pixel (broadcast to all channels)
+            zc_float = my_spots["zc"].to_numpy(dtype=np.float32)  # may contain nan
+            zc_pix = np.round(zc_float).astype(np.float32)  # still float; we'll handle nan next
+            zc_pix = np.where(np.isfinite(zc_pix), zc_pix, -1).astype(np.int16)
 
-                # shift into padded video z coordinates
-                zc_vals_padded = (zc_vals + z_pre).astype(np.int16)
+            # compute per-channel homography-corrected xy (global float), then pixel and padded indices
+            xy_in = my_spots[["xc", "yc"]].to_numpy(dtype=np.float32)  # global float input
+            x_global = np.full((n_channels, len(my_spots)), np.nan, dtype=np.float32)
+            y_global = np.full((n_channels, len(my_spots)), np.nan, dtype=np.float32)
 
-                # broadcast to all channels in ds
-                for ch_i in range(n_channels):
-                    my_zc_all[my_fov_ind, : len(zc_vals), int(my_f), ch_i] = zc_vals_padded
-            else:
-                zc_vals = None
-                zc_vals_padded = None
-
-            # Homography-correct xy coordinates per channel (no scaling, just transform + padding offset)
-            my_x = np.zeros((n_channels, len(my_ns)), dtype=np.int16)
-            my_y = np.zeros((n_channels, len(my_ns)), dtype=np.int16)
             for ch_i in range(n_channels):
-                if len(my_spots) > 0:
-                    temp = [
-                        list(np.dot(homography[ch_i], np.array([pos[0], pos[1], 1]))[0:2])
-                        for pos in my_spots[["xc", "yc"]].values
-                    ]
-                    my_x[ch_i], my_y[ch_i] = np.array(temp).T
-                    my_x[ch_i] = (my_x[ch_i] + xy_pad + 1).round(0).astype(np.int16)
-                    my_y[ch_i] = (my_y[ch_i] + xy_pad + 1).round(0).astype(np.int16)
+                H = homography[ch_i]
+                # apply homography to each point
+                temp = [np.dot(H, np.array([p[0], p[1], 1.0], dtype=np.float32))[0:2] for p in xy_in]
+                temp = np.asarray(temp, dtype=np.float32)
+                x_global[ch_i] = temp[:, 0]
+                y_global[ch_i] = temp[:, 1]
 
-            # Extract crops
-            for i in my_ns:
+            x_pix = np.round(x_global).astype(np.float32)
+            y_pix = np.round(y_global).astype(np.float32)
+            x_pix = np.where(np.isfinite(x_pix), x_pix, -1).astype(np.int16)
+            y_pix = np.where(np.isfinite(y_pix), y_pix, -1).astype(np.int16)
+
+            x_pad = (x_pix.astype(np.int32) + (xy_pad + 1)).astype(np.int16)
+            y_pad = (y_pix.astype(np.int32) + (xy_pad + 1)).astype(np.int16)
+
+            # local z selector z_pos:
+            if use_z_slab:
+                # valid zc_pix => z_pos=z_pad, else -1 (we also mark out-of-bounds later)
+                z_pos = np.where(zc_pix >= 0, z_pad, -1).astype(np.int16)
+            else:
+                # full-z storage: z_pos can mirror zc_pix (global == local index)
+                z_pos = zc_pix.astype(np.int16)
+
+            # write coord layers
+            for ch_i in range(n_channels):
+                my_xc_all[my_fov_ind, my_ns, int(my_f), ch_i] = x_global[ch_i]
+                my_yc_all[my_fov_ind, my_ns, int(my_f), ch_i] = y_global[ch_i]
+
+                my_xc_pix_all[my_fov_ind, my_ns, int(my_f), ch_i] = x_pix[ch_i]
+                my_yc_pix_all[my_fov_ind, my_ns, int(my_f), ch_i] = y_pix[ch_i]
+
+                my_xc_pad_all[my_fov_ind, my_ns, int(my_f), ch_i] = x_pad[ch_i]
+                my_yc_pad_all[my_fov_ind, my_ns, int(my_f), ch_i] = y_pad[ch_i]
+
+                my_zc_all[my_fov_ind, my_ns, int(my_f), ch_i] = zc_float
+                my_zc_pix_all[my_fov_ind, my_ns, int(my_f), ch_i] = zc_pix
+                my_z_pos_all[my_fov_ind, my_ns, int(my_f), ch_i] = z_pos
+
+            # extract crops
+            for j, n_idx in enumerate(my_ns):
                 for ch_i in range(n_channels):
-                    if has_zc:
-                        # If zc unknown (-1), leave zeros
-                        if int(zc_vals[i]) < 0:
-                            continue
-                        zc_center = int(zc_vals_padded[i])
-                        z0 = zc_center - z_pad
-                        z1 = zc_center + z_pad + 1  # exclusive
-                        my_crops_all[my_fov_ind, i, int(my_f), :, :, :, ch_i] = video[
-                            my_fov_ind,
-                            int(my_f),
-                            z0:z1,
-                            int(my_y[ch_i, i]) - xy_pad : int(my_y[ch_i, i]) + xy_pad + 1,
-                            int(my_x[ch_i, i]) - xy_pad : int(my_x[ch_i, i]) + xy_pad + 1,
-                            ch_i,
-                        ]
-                    else:
-                        # legacy: keep all z planes
-                        my_crops_all[my_fov_ind, i, int(my_f), :, :, :, ch_i] = video[
-                            my_fov_ind,
-                            int(my_f),
-                            :z_slices,
-                            int(my_y[ch_i, i]) - xy_pad : int(my_y[ch_i, i]) + xy_pad + 1,
-                            int(my_x[ch_i, i]) - xy_pad : int(my_x[ch_i, i]) + xy_pad + 1,
-                            ch_i,
-                        ]
+                    # padded indices for slicing padded movie
+                    xc_p = int(x_pad[ch_i, j])
+                    yc_p = int(y_pad[ch_i, j])
 
-                    my_xc_all[my_fov_ind, i, int(my_f), ch_i] = my_x[ch_i, i]
-                    my_yc_all[my_fov_ind, i, int(my_f), ch_i] = my_y[ch_i, i]
+                    # invalid xy -> leave zeros
+                    if xc_p < 0 or yc_p < 0:
+                        my_z_pos_all[my_fov_ind, n_idx, int(my_f), ch_i] = -1
+                        continue
+
+                    y0 = yc_p - xy_pad
+                    y1 = yc_p + xy_pad + 1
+                    x0 = xc_p - xy_pad
+                    x1 = xc_p + xy_pad + 1
+
+                    if use_z_slab:
+                        zc_g = int(zc_pix[j])  # global z index into original stack
+                        if zc_g < 0:
+                            my_z_pos_all[my_fov_ind, n_idx, int(my_f), ch_i] = -1
+                            continue
+
+                        z0 = zc_g - z_pad
+                        z1 = zc_g + z_pad + 1  # exclusive
+
+                        # out of bounds => keep zeros and mark invalid
+                        if (z0 < 0) or (z1 > z_slices) or (z1 <= z0):
+                            my_z_pos_all[my_fov_ind, n_idx, int(my_f), ch_i] = -1
+                            continue
+
+                        slab = video_pad[my_fov_ind, int(my_f), z0:z1, y0:y1, x0:x1, ch_i]
+                        if slab.shape[0] != (2 * z_pad + 1):
+                            my_z_pos_all[my_fov_ind, n_idx, int(my_f), ch_i] = -1
+                            continue
+
+                        my_crops_all[my_fov_ind, n_idx, int(my_f), :, :, :, ch_i] = slab
+                    else:
+                        # full z
+                        my_crops_all[my_fov_ind, n_idx, int(my_f), :, :, :, ch_i] = video_pad[
+                            my_fov_ind, int(my_f), :, y0:y1, x0:x1, ch_i
+                        ]
 
         my_fov_ind += 1
 
-    # Coordinates
+    # -------------------------
+    # build coordinates
+    # -------------------------
     n = xr.DataArray(np.arange(n_spots_max).astype(np.int16), attrs={"long_name": "crop count"})
     t = xr.DataArray(np.arange(n_frames) * my_dt, attrs={"units": units[1], "long_name": "time"})
 
-    if has_zc:
-        z = xr.DataArray(
-            np.arange(-z_pad, z_pad + 1) * my_dz,
-            attrs={"units": units[0], "long_name": "axial z-distance (relative)"},
-        )
+    if use_z_slab:
+        z_vals = (np.arange(2 * z_pad + 1) - z_pad) * my_dz
+        z_long = "axial z (slab-relative, centered at 0)"
     else:
-        z = xr.DataArray(
-            np.arange(z_slices) * my_dz,
-            attrs={"units": units[0], "long_name": "axial z-distance"},
-        )
+        z_vals = np.arange(z_slices) * my_dz
+        z_long = "axial z-distance"
 
-    y = xr.DataArray(
-        np.arange(-xy_pad, xy_pad + 1) * my_dy,
-        attrs={"units": units[0], "long_name": "radial y-distance"},
-    )
-    x = xr.DataArray(
-        np.arange(-xy_pad, xy_pad + 1) * my_dx,
-        attrs={"units": units[0], "long_name": "radial x-distance"},
-    )
+    z = xr.DataArray(z_vals, attrs={"units": units[0], "long_name": z_long})
+    y = xr.DataArray(np.arange(-xy_pad, xy_pad + 1) * my_dy, attrs={"units": units[0], "long_name": "radial y-distance"})
+    x = xr.DataArray(np.arange(-xy_pad, xy_pad + 1) * my_dx, attrs={"units": units[0], "long_name": "radial x-distance"})
     ch = np.arange(n_channels)
     fov = np.arange(n_fov)
 
+    # -------------------------
+    # dataset variables
+    # -------------------------
     dx = xr.DataArray(my_dx, coords=[], dims=[], attrs={"units": units[0], "long_name": "x-resolution"})
     dy = xr.DataArray(my_dy, coords=[], dims=[], attrs={"units": units[0], "long_name": "y-resolution"})
     dz = xr.DataArray(my_dz, coords=[], dims=[], attrs={"units": units[0], "long_name": "z-resolution"})
@@ -248,36 +387,39 @@ def _create_crop_array_dataset(video, df, **kwargs):
     xy_pad_da = xr.DataArray(xy_pad, coords=[], dims=[], attrs={"units": "pixels"})
 
     intensity = xr.DataArray(
-        my_crops_all.astype(np.int32),
+        my_crops_all,
         coords=[fov, n, t, z, y, x, ch],
         dims=["fov", "n", "t", "z", "y", "x", "ch"],
         attrs={"units": "intensity (a.u.)", "long_name": "intensity"},
     )
-    xc = xr.DataArray(
-        my_xc_all.astype(np.int16),
-        coords=[fov, n, t, ch],
-        dims=["fov", "n", "t", "ch"],
-        attrs={"units": "pixels", "long_name": "crop center x"},
-    )
-    yc = xr.DataArray(
-        my_yc_all.astype(np.int16),
-        coords=[fov, n, t, ch],
-        dims=["fov", "n", "t", "ch"],
-        attrs={"units": "pixels", "long_name": "crop center y"},
-    )
-    zc = xr.DataArray(
-        my_zc_all.astype(np.int16),
-        coords=[fov, n, t, ch],
-        dims=["fov", "n", "t", "ch"],
-        attrs={"units": "pixels", "long_name": "crop center z (-1 = unknown)"},
-    )
 
-    optional_layers = [
-        xr.DataArray(my_layers[i].astype(np.int16), coords=[fov, n, t], dims=["fov", "n", "t"])
-        for i in range(len(my_columns))
-    ]
+    xc = xr.DataArray(my_xc_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                      attrs={"units": "pixels", "long_name": "xc (global movie coords, float)"})
+    yc = xr.DataArray(my_yc_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                      attrs={"units": "pixels", "long_name": "yc (global movie coords, float)"})
+    zc = xr.DataArray(my_zc_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                      attrs={"units": "z-index", "long_name": "zc (global movie coords, float)"})
+
+
+    xc_pix = xr.DataArray(my_xc_pix_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                          attrs={"units": "pixels", "long_name": "xc pixel index (global, rounded)"})
+    yc_pix = xr.DataArray(my_yc_pix_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                          attrs={"units": "pixels", "long_name": "yc pixel index (global, rounded)"})
+    zc_pix = xr.DataArray(my_zc_pix_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                          attrs={"units": "index", "long_name": "zc pixel index (global, rounded; -1 unknown)"})
+
+
+    xc_pad = xr.DataArray(my_xc_pad_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                          attrs={"units": "pixels", "long_name": "xc index into padded video"})
+    yc_pad = xr.DataArray(my_yc_pad_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                          attrs={"units": "pixels", "long_name": "yc index into padded video"})
+
+    z_pos = xr.DataArray(my_z_pos_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
+                         attrs={"units": "index", "long_name": "local z index for best-z selection (-1 invalid)"})
+
+    # optional layers
+    optional_layers = [xr.DataArray(my_layers[i], coords=[fov, n, t], dims=["fov", "n", "t"]) for i in range(len(my_columns))]
     dict1 = dict(zip(my_columns, optional_layers))
-
     if "id" in dict1:
         dict1["id"].attrs.update({"units": "index", "long_name": "spot id"})
     if "track_id" in dict1:
@@ -286,19 +428,18 @@ def _create_crop_array_dataset(video, df, **kwargs):
     ds = xr.Dataset(
         {
             "int": intensity,
-            "xc": xc,
-            "yc": yc,
-            "zc": zc,
-            "dx": dx,
-            "dy": dy,
-            "dz": dz,
-            "dt": dt,
+            "xc": xc, "yc": yc, "zc": zc,
+            "xc_pix": xc_pix, "yc_pix": yc_pix, "zc_pix": zc_pix,
+            "xc_pad": xc_pad, "yc_pad": yc_pad,
+            "z_pos": z_pos,
+            "dx": dx, "dy": dy, "dz": dz, "dt": dt,
             "xy_pad": xy_pad_da,
             **dict1,
         },
         attrs={"name": name, "date": date},
     )
     return ds
+
 
 # def _create_crop_array_dataset(video, df, **kwargs): 
 #     """

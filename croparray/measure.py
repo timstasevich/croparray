@@ -8,6 +8,14 @@ __all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props", 
 
 import xarray as xr
 
+import numpy as np
+import xarray as xr
+
+
+import numpy as np
+import xarray as xr
+
+
 def best_z_proj(
     ca,
     ref_ch: int | None = 0,
@@ -16,137 +24,165 @@ def best_z_proj(
     use_zc: bool = False,
 ):
     """
-    Return a best-z projection of crop intensities and (optionally) compute/overwrite `ca['zc']`.
+    Return a best-z projection of crop intensities.
 
-    This function produces a per-crop "best-z" image (one z-plane per crop) and returns it as an
-    xarray DataArray with dimensions `(fov, n, t, y, x, ch)` (and any other non-z dimensions present
-    in `ca.int`, excluding `z`). The output is always constructed from `ca.int` by applying a
-    rolling z max-projection of length `roll_n` (centered; `min_periods=1`) and then selecting a
-    single z index per crop.
+    Output is constructed from `ca.int` by:
+      1) applying a centered rolling-z max projection of length `roll_n` (min_periods=1)
+      2) selecting a single z index per crop.
 
     Two modes are supported:
 
-    **Mode A (default): `use_zc=False`**
-        - Compute the best z index (`zc`) by maximizing the mean intensity within an xy disk of
-          radius `disk_r` (in pixels) around the crop center, using either:
-            - `ref_ch` channel (if `ref_ch` is an int), or
-            - separately per channel (if `ref_ch is None`).
-        - Overwrite/define `ca['zc']` with the computed best-z indices.
+    Mode A (default): use_zc=False
+      - Compute per-crop best z by maximizing mean intensity within an xy disk of radius `disk_r`.
+      - Stores the result as:
+          * ca['z_pos_best'] : local z index into the stored `z` dimension (dims like fov,n,t[,ch])
+          * ca['zc_best_pix'] : global best z pixel index (if ca['zc_pix'] exists)
+          * ca['zc_best'] : global best z coordinate in z-index units (if ca['zc'] exists)
+      - Does NOT overwrite ca['zc'] (which is treated as a global float coordinate).
 
-    **Mode B: `use_zc=True`**
-        - Do *not* compute a new best z.
-        - Use the existing `ca['zc']` as the z index to select (after rolling-z max).
-        - If `ca['zc']` contains a `ch` dimension, each channel uses its own `zc` values.
-          If `ca['zc']` has no `ch` dimension, that single z index is used for all channels.
-        - If `zc == -1` for a given crop (untracked / unknown), the returned crop is all zeros.
+    Mode B: use_zc=True
+      - Do not compute best z.
+      - Use an existing selector to pick z after rolling-max:
+          * prefers ca['z_pos'] if present (local index into stored `z`)
+          * otherwise falls back to ca['zc'] (legacy only; must already be local)
+      - If selector == -1, returns all zeros for those crops.
 
     Parameters
     ----------
-    ca : xarray Dataset-like (CropArray)
-        Must contain:
-          - `ca.int` : DataArray with a `z` dimension and typically dims like (fov, n, t, z, y, x, ch)
-          - `ca.dx`  : spatial resolution used to convert `disk_r` pixels into coordinate units
-        If `use_zc=True`, must also contain `ca['zc']`.
-
+    ca : Dataset-like
+        Must contain `ca.int` with a `z` dimension and coords `x`, `y`.
     ref_ch : int or None, default=0
-        Reference channel for computing best-z when `use_zc=False`.
-        - If int: compute `zc` from that channel and apply the same `zc` to all channels.
-        - If None: compute `zc` independently for each channel (requires/creates `zc` with `ch` dim).
-
-        When `use_zc=True`, this argument is ignored.
-
+        Used only when use_zc=False:
+          - int: compute z_pos_best from that channel and apply to all channels
+          - None: compute independently per channel (produces z_pos_best with ch dim)
     disk_r : int, default=1
-        Disk radius (in pixels) used to compute the best-z signal when `use_zc=False`.
-
+        Radius in pixels of xy disk for computing best-z signal.
     roll_n : int, default=1
-        Rolling window size along z used for the rolling-z max projection.
-        Uses `.rolling(z=roll_n, center=True, min_periods=1).max()`.
-
+        Rolling window along z for rolling max projection.
     use_zc : bool, default=False
-        If True, use the existing `ca['zc']` to select the z plane (after rolling-z max) and do not
-        modify/overwrite `ca['zc']`. If False, compute/overwrite `ca['zc']` as in current behavior.
+        If True, use existing z selector (z_pos preferred; else zc).
 
     Returns
     -------
     xarray.DataArray
-        Best-z data with dimensions `(fov, n, t, y, x, ch)` (plus any other non-z dims present).
-
-    Notes
-    -----
-    - This function mutates `ca` only when `use_zc=False` (it defines/overwrites `ca['zc']`).
-    - `roll_n` affects the output in both modes, because selection is performed after applying the
-      rolling-z max projection.
+        Best-z image with dims like (fov,n,t,y,x,ch).
     """
-    res = ca.dx  # resolution for defining disk
+    res = ca.dx  # used to convert pixel radius to coordinate units (matches your existing convention)
 
     def _rolled_ch(ch_idx):
-        """Return rolled-z max-projection for a single channel as DataArray with z retained."""
         return ca.int.sel(ch=ch_idx).rolling(z=roll_n, center=True, min_periods=1).max()
 
     def _isel_z_or_zero(da_z, z_index_da):
         """
-        Select along z using an indexer DataArray (no 'z' dim), returning da without 'z'.
-
-        If z_index_da == -1 anywhere, those entries are returned as zeros with the same dtype.
+        Vectorized selection along z with:
+          - invalid (z_index == -1 or out of range) -> zeros
         """
-        z_index_da = z_index_da.astype(int)
-        valid = z_index_da >= 0
-        z_index_safe = z_index_da.where(valid, 0)
-        out = da_z.isel(z=z_index_safe)
+        z_len = da_z.sizes["z"]
+
+        z_index = xr.apply_ufunc(
+            lambda a: np.asarray(a).astype(np.int64),
+            z_index_da,
+            dask="allowed",
+            output_dtypes=[np.int64],
+        )
+
+        valid = (z_index >= 0) & (z_index < z_len)
+        z_safe = z_index.where(valid, 0)
+
+        out = da_z.isel(z=z_safe)
         out = out.where(valid, 0)
         return out
 
+    def _get_existing_selector():
+        # New datasets: use local selector
+        if "z_pos" in ca:
+            return ca["z_pos"]
+        # Legacy fallback: allow old datasets that used ca['zc'] as local index
+        if "zc" in ca:
+            return ca["zc"]
+        raise ValueError(
+            "use_zc=True requires an existing z selector: ca['z_pos'] (preferred) or ca['zc'] (legacy)."
+        )
+
+    def _maybe_write_global_best(z_pos_best):
+        """
+        If global z center exists, map local z_pos_best -> global best z pixel index.
+        Works for both full-z and slab-z datasets if ca['zc_pix'] exists.
+        """
+        if "zc_pix" not in ca:
+            return
+
+        # Determine z offset of stored z coordinate.
+        # If your stored z coordinate is slab-relative centered at 0, then:
+        #   z_center_local = index where z == 0  (often z_pad)
+        # If it's full z starting at 0, z==0 is also at index 0.
+        if "z" in ca.coords:
+            z_vals = ca["z"].values
+            # find index closest to 0 in z coordinate units
+            z0_idx = int(np.argmin(np.abs(z_vals)))
+        else:
+            z0_idx = 0
+
+        # local -> global: zc_best_pix = zc_pix + (z_pos_best - z0_idx)
+        # honor invalids
+        valid = z_pos_best >= 0
+        zc_best_pix = ca["zc_pix"] + (z_pos_best - z0_idx)
+        zc_best_pix = zc_best_pix.where(valid, -1).astype(np.int16)
+
+        ca["zc_best_pix"] = zc_best_pix
+        ca["zc_best_pix"].attrs["units"] = "index"
+        ca["zc_best_pix"].attrs["long_name"] = "best z (global pixel index; -1 invalid)"
+
+        # If you also want a float global z coordinate in z-index units:
+        if "zc" in ca:
+            # `zc` is float global z center; add same offset
+            ca["zc_best"] = (ca["zc"] + (z_pos_best - z0_idx)).where(valid, np.nan)
+            ca["zc_best"].attrs["units"] = "z-index"
+            ca["zc_best"].attrs["long_name"] = "best z (global movie z-index units; float)"
+
     # -----------------------
-    # Mode B: use existing zc
+    # Mode B: use existing selector (z_pos preferred)
     # -----------------------
     if use_zc:
-        if "zc" not in ca:
-            raise ValueError("use_zc=True requires ca to already contain a 'zc' layer (ca['zc']).")
-
-        zc_da = ca["zc"]
+        sel_da = _get_existing_selector()
 
         out_per_ch = []
         for ch_idx in ca.ch.values:
-            # If zc has ch, each channel uses its own zc; otherwise broadcast
-            if "ch" in zc_da.dims:
-                z_index = zc_da.sel(ch=ch_idx)
-            else:
-                z_index = zc_da
-
+            z_index = sel_da.sel(ch=ch_idx) if "ch" in sel_da.dims else sel_da
             out_per_ch.append(_isel_z_or_zero(_rolled_ch(ch_idx), z_index))
 
         return xr.concat(out_per_ch, dim="ch").assign_coords(ch=ca.ch.values)
 
     # -----------------------------------
-    # Mode A: compute/overwrite zc (legacy)
+    # Mode A: compute best-z (store as z_pos_best; do NOT overwrite global zc)
     # -----------------------------------
     if ref_ch is None:
-        # Compute zc separately for each channel
-        z_sig = [
-            ca.sel(ch=ch_index).int.where(lambda a: a.x**2 + a.y**2 <= (disk_r * res) ** 2)
-            .mean(dim=["x", "y"])
-            .rolling(z=roll_n, center=True, min_periods=1)
-            .max()
-            for ch_index in ca.ch.values
-        ]
+        # compute independently per channel
+        z_pos_best_list = []
+        out_list = []
+        for ch_idx in ca.ch.values:
+            z_sig = (
+                ca.sel(ch=ch_idx)
+                .int.where(lambda a: a.x**2 + a.y**2 <= (disk_r * res) ** 2)
+                .mean(dim=["x", "y"])
+                .rolling(z=roll_n, center=True, min_periods=1)
+                .max()
+            )
+            z_pos_best = z_sig.argmax(dim="z").astype(np.int16)
+            z_pos_best_list.append(z_pos_best)
+            out_list.append(_isel_z_or_zero(_rolled_ch(ch_idx), z_pos_best))
 
-        output = xr.concat(
-            [
-                _isel_z_or_zero(_rolled_ch(ca.ch.values[i]), z_sig[i].argmax(dim="z"))
-                for i in range(len(ca.ch.values))
-            ],
-            dim="ch",
-        ).assign_coords(ch=ca.ch.values)
+        out = xr.concat(out_list, dim="ch").assign_coords(ch=ca.ch.values)
 
-        ca["zc"] = xr.concat([z_sig[i].argmax(dim="z") for i in range(len(ca.ch.values))], dim="ch")
-        ca["zc"] = ca["zc"].assign_coords(ch=ca.ch.values)
-        ca.zc.attrs["units"] = "pixels"
-        ca.zc.attrs["long_name"] = "crop center z for each channel"
+        ca["z_pos_best"] = xr.concat(z_pos_best_list, dim="ch").assign_coords(ch=ca.ch.values)
+        ca["z_pos_best"].attrs["units"] = "index"
+        ca["z_pos_best"].attrs["long_name"] = "best z (local index into stored z) per channel"
 
-        return output
+        _maybe_write_global_best(ca["z_pos_best"])
+        return out
 
     else:
-        # Compute zc from reference channel and apply to all channels
+        # compute from reference channel and apply to all channels
         z_sig = (
             ca.sel(ch=ref_ch)
             .int.where(lambda a: a.x**2 + a.y**2 <= (disk_r * res) ** 2)
@@ -154,19 +190,20 @@ def best_z_proj(
             .rolling(z=roll_n, center=True, min_periods=1)
             .max()
         )
+        z_pos_best = z_sig.argmax(dim="z").astype(np.int16)
 
-        z_index = z_sig.argmax(dim="z")
-
-        output = xr.concat(
-            [_isel_z_or_zero(_rolled_ch(ch_idx), z_index) for ch_idx in ca.ch.values],
+        out = xr.concat(
+            [_isel_z_or_zero(_rolled_ch(ch_idx), z_pos_best) for ch_idx in ca.ch.values],
             dim="ch",
         ).assign_coords(ch=ca.ch.values)
 
-        ca["zc"] = z_index
-        ca.zc.attrs["units"] = "pixels"
-        ca.zc.attrs["long_name"] = "crop center z"
+        ca["z_pos_best"] = z_pos_best
+        ca["z_pos_best"].attrs["units"] = "index"
+        ca["z_pos_best"].attrs["long_name"] = "best z (local index into stored z)"
 
-        return output
+        _maybe_write_global_best(ca["z_pos_best"])
+        return out
+
 
 
 
