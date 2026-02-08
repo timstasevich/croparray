@@ -253,7 +253,22 @@ class CropArray:
                 f"labels length ({len(labels)}) must match number of CropArrays ({len(cas)})."
             )
 
-        ds_list = [ca.ds for ca in cas]
+        # Accept either CropArray-like objects (with .ds) or raw xarray.Datasets.
+        ds_list: list[xr.Dataset] = []
+        wrapper_type = None  # preserve wrapper type if possible
+
+        for obj in cas:
+            if hasattr(obj, "ds"):
+                if wrapper_type is None:
+                    wrapper_type = type(obj)
+                ds_list.append(obj.ds)  # type: ignore[attr-defined]
+            elif isinstance(obj, xr.Dataset):
+                ds_list.append(obj)
+            else:
+                raise TypeError(
+                    f"cas must contain CropArray/TrackArray objects or xarray.Dataset; got {type(obj)}"
+                )
+
         dim_coord = xr.DataArray(list(labels), dims=(dim,), name=dim)
 
         ds_out = xr.concat(
