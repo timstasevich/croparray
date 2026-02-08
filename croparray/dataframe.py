@@ -4,7 +4,6 @@ import pandas as pd
 
 __all__ = ["variables_to_df"]
 
-# Pull out variables in a crop array to a dataframe
 def variables_to_df(ca, var_names):
     """
     Creates a pandas DataFrame from selected variables of a CropArray.
@@ -23,22 +22,32 @@ def variables_to_df(ca, var_names):
         MultiIndex flattened (similar to ``xr.Dataset.to_dataframe()`` but with a
         flattened index).
     """
-        # Check if variables exist in the dataset
+    # Check if variables exist in the dataset
     for var in var_names:
         if var not in ca:
             raise ValueError(f"'{var}' not found in the provided xarray dataset.")
 
-    # Check if the variables have the same dimensions
-    dims = ca[var_names[0]].dims
-    for var in var_names[1:]:
-        if ca[var].dims != dims:
-            raise ValueError(f"Variables do not have matching dimensions. {var_names[0]} has dimensions {dims} while {var} has dimensions {ca[var].dims}")
+    # Require same dims as a SET (order-insensitive), then normalize order
+    canonical_dims = ca[var_names[0]].dims
+    canonical_set = set(canonical_dims)
 
-    # Convert each variable to a dataframe and concatenate them
-    dfs = [ca[var].to_dataframe().reset_index(level=list(range(len(dims)))) for var in var_names]
-    
+    for var in var_names[1:]:
+        if set(ca[var].dims) != canonical_set:
+            raise ValueError(
+                "Variables do not have matching dimensions (ignoring order). "
+                f"{var_names[0]} has dimensions {canonical_dims} while {var} has "
+                f"dimensions {ca[var].dims}"
+            )
+
+    # Convert each variable to a dataframe after transposing to canonical order
+    dfs = []
+    for var in var_names:
+        da = ca[var].transpose(*canonical_dims)
+        df = da.to_dataframe(name=var).reset_index()
+        dfs.append(df)
+
+    # Concatenate side-by-side and drop duplicate index columns
     final_df = pd.concat(dfs, axis=1)
-    # Drop duplicate columns if any arise due to the reset index operation
-    final_df = final_df.loc[:,~final_df.columns.duplicated()]
-    
+    final_df = final_df.loc[:, ~final_df.columns.duplicated()]
+
     return final_df

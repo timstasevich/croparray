@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Union
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Union
 import xarray as xr
 
 from ..crop_array_object import CropArray
+
+if TYPE_CHECKING:
+    # Import only for type checking (avoids runtime circular imports)
+    from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure
 
 
 @dataclass
@@ -20,7 +24,13 @@ class TrackArray(CropArray):
       - optional dims: z, y, x, ch
     """
 
-    def __post_init__(self):
+    # Typed caches (init=False so dataclass doesn't expect them in the constructor)
+    _tplot: "TrackArrayPlot" = field(init=False, repr=False)
+    _tview: "TrackArrayView" = field(init=False, repr=False)
+    _tdf: "TrackArrayDF" = field(init=False, repr=False)
+    _tmeasure: "TrackArrayMeasure" = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
         # Base initialization (attaches io/build/measure/plot/view/df/track/ops)
         super().__post_init__()
 
@@ -39,31 +49,28 @@ class TrackArray(CropArray):
         object.__setattr__(self, "_tdf", TrackArrayDF(self))
         object.__setattr__(self, "_tmeasure", TrackArrayMeasure(self))
 
-
     def __repr__(self) -> str:
         sizes = self.ds.sizes
-        return (
-            f"TrackArray("
-            f"tracks={sizes.get('track_id', '?')}, "
-            f"t={sizes.get('t', '?')})"
-        )
+        return f"TrackArray(tracks={sizes.get('track_id', '?')}, t={sizes.get('t', '?')})"
 
+    # ---- Typed properties (critical for autocomplete / docstrings) ----
     @property
-    def tplot(self):
+    def tplot(self) -> "TrackArrayPlot":
         return self._tplot
 
     @property
-    def tview(self):
+    def tview(self) -> "TrackArrayView":
         return self._tview
 
     @property
-    def tdf(self):
+    def tdf(self) -> "TrackArrayDF":
         return self._tdf
 
     @property
-    def tmeasure(self):
+    def tmeasure(self) -> "TrackArrayMeasure":
         return self._tmeasure
 
+    # ---- Convenience ----
     @property
     def track_ids(self):
         return self.ds.coords["track_id"].values
@@ -82,6 +89,7 @@ class TrackArray(CropArray):
         except Exception:
             return f"<pre>{repr(self.ds)}</pre>"
 
+    # ---- xarray-like methods that preserve wrapper type ----
     def sel(self, *args, **kwargs):
         """xarray-like selection that preserves the wrapper type."""
         return type(self)(self.ds.sel(*args, **kwargs))

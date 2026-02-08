@@ -369,6 +369,7 @@ TrackArrayPlot.plot_track_signal_traces.__signature__ = inspect.Signature(parame
 
 
 from croparray.trackarray.measure import tracklist as _impl_TrackArrayMeasure_tracklist
+from croparray.trackarray.measure import track_length as _impl_TrackArrayMeasure_track_length
 
 @dataclass
 class TrackArrayMeasure(_BaseAccessor):
@@ -394,10 +395,41 @@ Returns
 np.ndarray or xarray.DataArray"""
         return _impl_TrackArrayMeasure_tracklist(self.ds, var=var, min_count=min_count, return_mask=return_mask)
 
+    def track_length(self, coord='xc', out_name='track_length', broadcast_like='signal'):
+        """Compute per-track length as the number of timepoints where the track exists,
+independent of fluorescence intensity.
+
+Track existence is defined by `coord.notnull()`. By croparray convention,
+coordinates such as 'xc' are NaN at timepoints where no detection exists
+for that track.
+
+Parameters
+----------
+ta : TrackArray
+    Input TrackArray.
+coord : str, default "xc"
+    Coordinate-like data variable used to define presence (NaN = absent).
+    Typical choices: "xc", "yc", "zc".
+out_name : str, default "track_length"
+    Name of the output data variable.
+broadcast_like : str | None, default "signal"
+    Variable to broadcast the per-track length onto so that `out_name`
+    matches its dims (e.g. track_id × t × ...). If None or missing, the
+    output is broadcast to match the presence mask derived from `coord`.
+
+Returns
+-------
+TrackArray
+    The same TrackArray with a new `out_name` layer added."""
+        return _impl_TrackArrayMeasure_track_length(self.ds, coord=coord, out_name=out_name, broadcast_like=broadcast_like)
+
 
 TrackArrayMeasure.tracklist.__doc__ = _impl_TrackArrayMeasure_tracklist.__doc__
 TrackArrayMeasure.tracklist.__wrapped__ = _impl_TrackArrayMeasure_tracklist
 TrackArrayMeasure.tracklist.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_tracklist).parameters.values())[1:])
+TrackArrayMeasure.track_length.__doc__ = _impl_TrackArrayMeasure_track_length.__doc__
+TrackArrayMeasure.track_length.__wrapped__ = _impl_TrackArrayMeasure_track_length
+TrackArrayMeasure.track_length.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_track_length).parameters.values())[1:])
 
 
 @dataclass

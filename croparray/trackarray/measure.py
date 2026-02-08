@@ -3,7 +3,7 @@ import xarray as xr
 
 __all__ = [
     # ... existing ...
-    "tracklist",
+    "tracklist","track_length"
 ]
 
 def tracklist(
@@ -65,3 +65,45 @@ def tracklist(
         return present
 
     return track_coord.values[present.values]
+
+
+def track_length(
+    ta,
+    *,
+    coord: str = "xc",
+    out_name: str = "track_length",
+    broadcast_like: str | None = "signal",
+):
+    """
+    Compute per-track length as the number of timepoints where the track exists,
+    independent of fluorescence intensity.
+
+    Track existence is defined by `coord.notnull()`. By croparray convention,
+    coordinates such as 'xc' are NaN at timepoints where no detection exists
+    for that track.
+    """
+    # Accept either TrackArray wrapper or raw xarray.Dataset (generated accessors pass Dataset)
+    ds = ta.ds if hasattr(ta, "ds") else ta
+
+    if coord not in ds:
+        raise KeyError(f"'{coord}' not found in dataset")
+
+    present = ds[coord].notnull()
+    track_length_track = present.sum(dim="t")
+
+    if broadcast_like is not None and broadcast_like in ds:
+        ds[out_name] = track_length_track.broadcast_like(ds[broadcast_like])
+    else:
+        ds[out_name] = track_length_track.broadcast_like(present)
+
+    ds[out_name].attrs.update(
+        {
+            "long_name": "track length (timepoints present)",
+            "source": coord,
+            "definition": f"{coord}.notnull().sum(dim='t')",
+            "units": "frames",
+        }
+    )
+
+    return ta
+
