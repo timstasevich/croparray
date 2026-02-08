@@ -274,6 +274,8 @@ def measure_signal(
     disk_bg=None,
     roll_n: int = 1,
     use_zc: bool = False,
+    drop_int: bool = False,
+    drop_best_z: bool = False,
 ):
     """
     Measure background-subtracted crop intensity signal using a best-z projection.
@@ -346,6 +348,11 @@ def measure_signal(
     ca["signal"].attrs["units"] = "intensity (a.u.)"
     ca["signal"].attrs["long_name"] = "crop signal (disk mean - ring median)"
 
+    if drop_int and "int" in ca:
+        ca = ca.drop_vars("int")
+    if drop_best_z and "best_z" in ca:
+        ca = ca.drop_vars("best_z")
+
     return ca
 
 
@@ -355,6 +362,8 @@ def measure_signal_raw(
     disk_r: int = 1,
     roll_n: int = 1,
     use_zc: bool = False,
+    drop_int: bool = False,
+    drop_best_z_raw: bool = False
 ):
     """
     Measure raw (non-background-subtracted) crop intensity signal using a best-z projection.
@@ -409,6 +418,11 @@ def measure_signal_raw(
     ca["signal_raw"] = disk_sig
     ca["signal_raw"].attrs["units"] = "intensity (a.u.)"
     ca["signal_raw"].attrs["long_name"] = "raw crop signal (disk sum)"
+
+    if drop_int and "int" in ca:
+        ca = ca.drop_vars("int")
+    if drop_best_z_raw and "best_z" in ca:
+        ca = ca.drop_vars("best_z")
 
     return ca
 
