@@ -1205,6 +1205,150 @@ def create_crop_array(
 
 #     return ds
 
+def make_croparrays(
+    videos,
+    spots,
+    *,
+    out_dir: Optional[Union[str, Path]] = None,
+    out_ext: str = ".nc",
+    axes: Optional[Sequence[str]] = None,
+    define_axes: bool = True,
+    axes_source_index: int = 0,
+    tracker: Literal["auto", "trackmate", "trackpy", "croparray"] = "auto",
+    xy_um_per_px: Optional[float] = None,
+    z_um_per_plane: Optional[float] = None,
+    keep_cols: Optional[Sequence[str]] = None,
+    xy_pad: int = 10,
+    z_pad: int = 1,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    dz: Optional[float] = None,
+    dt: Optional[float] = None,
+    units: Optional[Sequence[str]] = None,
+    date: Optional[str] = None,
+    as_object: bool = False,
+    skip_existing: bool = True,
+    progress: bool = True,
+    notes: str = "A croparray built from a tracking file and a video.",
+):
+    """
+    High-level convenience builder that accepts either:
+      - single (video, spots) OR
+      - lists of (videos, spots)
+
+    It standardizes video axes, standardizes spots tables, builds croparrays,
+    and optionally writes .nc files.
+
+    Behavior:
+      - Never overwrites existing outputs.
+      - If out_dir is provided and skip_existing=True, existing .nc files are skipped.
+
+    Returns:
+      - If out_dir is None: returns a single dataset/object (single input) or list of them (batch)
+      - If out_dir is provided: returns list of output paths written (skipped files omitted)
+    """
+    from pathlib import Path
+    from tifffile import imread
+    import pandas as pd
+
+    # tqdm is optional
+    try:
+        from tqdm.auto import tqdm  # type: ignore
+    except Exception:  # pragma: no cover
+        tqdm = None
+
+    def _as_list(x):
+        if isinstance(x, (str, Path, pd.DataFrame)) or hasattr(x, "shape"):
+            return [x]
+        return list(x)
+
+    video_list = _as_list(videos)
+    spots_list = _as_list(spots)
+
+    if len(video_list) != len(spots_list):
+        raise ValueError(f"videos and spots must have the same length; got {len(video_list)} vs {len(spots_list)}")
+
+    out_path_dir = Path(out_dir) if out_dir is not None else None
+    if out_path_dir is not None:
+        out_path_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine axes once if needed
+    axes_use = tuple(axes) if axes is not None else None
+    if axes_use is None and define_axes:
+        from . import gui as _gui  # local import avoids GUI import at module import-time
+        axes_result = _gui.define_video_axes(path=video_list[axes_source_index])
+        axes_use = axes_result.axes
+
+    # Progress iterator
+    it = enumerate(zip(video_list, spots_list))
+    if progress and tqdm is not None:
+        it = tqdm(it, total=len(video_list), desc="croparray", unit="file")
+
+    results = []
+    written_paths = []
+
+    for fov_index, (vf, sf) in it:
+        # Determine output path (only if writing)
+        out_file = None
+        if out_path_dir is not None:
+            vf_path = Path(vf) if isinstance(vf, (str, Path)) else None
+            stem = vf_path.stem if vf_path is not None else f"video_{fov_index}"
+            out_file = out_path_dir / f"{stem}{out_ext}"
+
+            if out_file.exists():
+                if skip_existing:
+                    # safe reruns: skip
+                    continue
+                # never overwrite
+                raise FileExistsError(f"{out_file} exists. Croparray will not overwrite existing files.")
+
+        # Load video
+        video_raw = imread(vf) if isinstance(vf, (str, Path)) else vf
+
+        # Standardize axes if we have them
+        video_std = standardize_video_axes(video_raw, axes_use) if axes_use is not None else video_raw
+
+        # Standardize spots (path or df)
+        spots_std = standardize_spots(
+            sf,
+            tracker=tracker,
+            fov=fov_index,
+            xy_um_per_px=xy_um_per_px,
+            z_um_per_plane=z_um_per_plane,
+            keep_cols=keep_cols,
+        )
+
+        # Build crop array
+        ca_data = create_crop_array(
+            video_std,
+            spots_std,
+            xy_pad=xy_pad,
+            z_pad=z_pad,
+            dx=dx,
+            dy=dy,
+            dz=dz,
+            dt=dt,
+            units=units,
+            name=str(vf),
+            date=date,
+            as_object=as_object,
+        )
+        # Always store on the underlying xarray.Dataset
+        ds = ca_data.ds if hasattr(ca_data, "ds") else ca_data
+        ds.attrs["notes"] = notes
+
+        # Write output (explicitly create/overwrite only when file does not already exist)
+        if out_file is not None:
+            ds.to_netcdf(out_file, mode="w")
+            written_paths.append(out_file)
+
+    # Return written paths if writing, else return objects
+    if out_path_dir is not None:
+        return written_paths
+
+    return results[0] if len(results) == 1 else results
+
+
 # ============================================================
 # Append detailed dataset-builder docs to the public wrapper
 # ============================================================
