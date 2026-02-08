@@ -1,10 +1,21 @@
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import xarray as xr
-from typing import Sequence
+from typing import Sequence, TYPE_CHECKING
 from .tracking import to_track_array as _to_track_array
 
+if TYPE_CHECKING:
+    from .accessors import (
+        CropArrayIO,
+        CropArrayBuild,
+        CropArrayMeasure,
+        CropArrayPlot,
+        CropArrayView,
+        CropArrayDF,
+        CropArrayTrack,
+        CropArrayOps,
+    )
 
 @dataclass
 class CropArray:
@@ -13,6 +24,15 @@ class CropArray:
     crop-array builder. Provides method-style API: ca.best_z_proj(...), etc.
     """
     ds: xr.Dataset
+    _io: "CropArrayIO" = field(init=False, repr=False)
+    _build: "CropArrayBuild" = field(init=False, repr=False)
+    _measure: "CropArrayMeasure" = field(init=False, repr=False)
+    _plot: "CropArrayPlot" = field(init=False, repr=False)
+    _view: "CropArrayView" = field(init=False, repr=False)
+    _df: "CropArrayDF" = field(init=False, repr=False)
+    _track: "CropArrayTrack" = field(init=False, repr=False)
+    _ops: "CropArrayOps" = field(init=False, repr=False)
+
 
     def __post_init__(self):
         """
@@ -44,36 +64,37 @@ class CropArray:
 
 
     @property
-    def io(self):
+    def io(self) -> "CropArrayIO":
         return self._io
 
     @property
-    def build(self):
+    def build(self) -> "CropArrayBuild":
         return self._build
 
     @property
-    def measure(self):
+    def measure(self) -> "CropArrayMeasure":
         return self._measure
 
     @property
-    def plot(self):
+    def plot(self) -> "CropArrayPlot":
         return self._plot
 
     @property
-    def view(self):
+    def view(self) -> "CropArrayView":
         return self._view
 
     @property
-    def df(self):
+    def df(self) -> "CropArrayDF":
         return self._df
 
     @property
-    def track(self):
+    def track(self) -> "CropArrayTrack":
         return self._track
 
     @property
-    def ops(self):
+    def ops(self) -> "CropArrayOps":
         return self._ops
+
 
     def __setitem__(self, key: str, value):
         self.ds[key] = value

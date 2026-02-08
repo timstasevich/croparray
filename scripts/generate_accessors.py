@@ -73,6 +73,7 @@ def generate() -> None:
     lines.append("")
     lines.append("from dataclasses import dataclass")
     lines.append("from typing import Any")
+    lines.append("import inspect")
     lines.append("")
     lines.append("# This file is AUTO-GENERATED. Do not edit by hand.")
     lines.append("# Rebuild with: python scripts/generate_accessors.py")
@@ -124,11 +125,27 @@ def generate() -> None:
                 lines.append(f"    def {fn}(self, {sig_str}):")
             else:
                 lines.append(f"    def {fn}(self):")
+
+            # Put the docstring inside the method so VS Code/Pylance can see it
+            doc = inspect.getdoc(func) or ""
+            doc = doc.replace('"""', r"\"\"\"")
+            if doc:
+                lines.append(f'        """{doc}"""')
+
             lines.append(f"        {call}")
             lines.append("")
 
+
             # Defer docstring assignment until after the class ends (prevents indentation bugs)
             doc_assignments.append(f"{cls_name}.{fn}.__doc__ = {impl_name}.__doc__")
+            doc_assignments.append(f"{cls_name}.{fn}.__wrapped__ = {impl_name}")
+            doc_assignments.append(
+                f"{cls_name}.{fn}.__signature__ = inspect.Signature("
+                f"parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + "
+                f"list(inspect.signature({impl_name}).parameters.values())[1:]"
+                f")"
+            )
+
 
         lines.append("")  # end class block
 

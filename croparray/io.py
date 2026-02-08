@@ -1,8 +1,15 @@
+from __future__ import annotations
 
+from typing import Any, Literal, overload
 import xarray as xr
+from .crop_array_object import CropArray
 
+@overload
+def open_croparray(path: str, *, as_object: Literal[True] = True, **kwargs: Any) -> CropArray: ...
+@overload
+def open_croparray(path: str, *, as_object: Literal[False], **kwargs: Any) -> xr.Dataset: ...
 
-def open_croparray(path: str, as_object: bool = True, **kwargs):
+def open_croparray(path: str, *, as_object: bool = True, **kwargs: Any) -> CropArray | xr.Dataset:
     """
     Open a saved CropArray dataset and optionally wrap it as a CropArray object.
 
@@ -52,15 +59,18 @@ def open_croparray(path: str, as_object: bool = True, **kwargs):
 
     if as_object:
         # Local import avoids circular dependency
-        from .crop_array_object import CropArray
         return CropArray(ds)
 
     return ds
 
 
 
+@overload
+def open_croparray_zarr(store: str, *, as_object: Literal[True] = True, **kwargs: Any) -> CropArray: ...
+@overload
+def open_croparray_zarr(store: str, *, as_object: Literal[False], **kwargs: Any) -> xr.Dataset: ...
 
-def open_croparray_zarr(store: str, as_object: bool = True, **kwargs):
+def open_croparray_zarr(store: str, *, as_object: bool = True, **kwargs: Any) -> CropArray | xr.Dataset:
     """
     Open a saved CropArray stored in Zarr format and optionally wrap it as a
     CropArray object.

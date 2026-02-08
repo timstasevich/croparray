@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pandas as pd
 
 __all__ = ["variables_to_df"]
@@ -5,18 +7,21 @@ __all__ = ["variables_to_df"]
 # Pull out variables in a crop array to a dataframe
 def variables_to_df(ca, var_names):
     """
-    Creates a pandas dataframe from the specified variables of a crop array.  
+    Creates a pandas DataFrame from selected variables of a CropArray.
 
-    Parameters:
+    Parameters
     ----------
-    ca: crop array (x-array dataset)
-        A crop array.
-    var_names: list of str
-        Names of the variables in the xarray dataset to convert to a dataframe.
-    
-    Returns:
+    ca : xarray.Dataset
+        The CropArray dataset.
+    var_names : Sequence[str]
+        Names of variables in the dataset to include as columns.
+
+    Returns
     -------
-    A concatenated pandas dataframe with the specified variables such that each column of the dataframe corresponds to one coordinate dimension in the crop array. Basically the output corresponds to xr.to_dataframe(), but with multiindex flattened.
+    pandas.DataFrame
+        A concatenated DataFrame containing the requested variables, with any
+        MultiIndex flattened (similar to ``xr.Dataset.to_dataframe()`` but with a
+        flattened index).
     """
         # Check if variables exist in the dataset
     for var in var_names:

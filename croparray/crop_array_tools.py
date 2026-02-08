@@ -59,8 +59,8 @@ def print_banner():
 
 
 def concat(
-    *,
     cas: Sequence[CropArray],
+    *,
     dim: str = "Exp",
     labels: Sequence[str] | None = None,
     start_index: int = 1,
@@ -70,7 +70,12 @@ def concat(
     combine_attrs: str = "override",
 ) -> CropArray:
     """Package-level wrapper for :meth:`CropArray.concat`."""
-    return CropArray.concat(
+    if not cas:
+        raise ValueError("cas must contain at least one CropArray/TrackArray.")
+
+    # Dispatch to the concrete wrapper class (preserves TrackArray vs CropArray)
+    cls = type(cas[0])
+    return cls.concat(
         cas,
         dim=dim,
         labels=labels,
@@ -81,8 +86,10 @@ def concat(
         combine_attrs=combine_attrs,
     )
 
+
 # Keep top-level wrapper docs/signature in sync with the canonical classmethod
 concat.__doc__ = CropArray.concat.__doc__
 concat.__signature__ = inspect.signature(CropArray.concat)
+
 
 

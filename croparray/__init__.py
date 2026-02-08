@@ -17,6 +17,7 @@ from .crop_array_tools import concat
 from . import crop_array_tools
 from . import gui
 from . import build
+from . import dataframe
 
 # Short alias for functional tools (preferred over top-level forwarding)
 tools = crop_array_tools
@@ -36,7 +37,8 @@ __all__ = [
     "crop_array_tools",
     "tools",
     "gui",
-    "build"
+    "build",
+    "dataframe"
 ]
 
 # ---------------------------------------------------------------------
