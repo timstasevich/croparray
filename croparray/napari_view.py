@@ -7,14 +7,13 @@ import numpy as np
 import xarray as xr
 import napari
 
-__all__ = ["montage_viewer"]
+__all__ = ["montage_viewer","manual_filter_montage"]
 
 
-
-@dataclass(frozen=True)
-class ContrastSpec:
-    lo_pct: float = 2.0
-    hi_pct: float = 98.0
+# @dataclass(frozen=True)
+# class ContrastSpec:
+#     lo_pct: float = 2.0
+#     hi_pct: float = 98.0
 
 def _normalize_image_contrast(image_contrast):
     """
@@ -92,18 +91,35 @@ def _select_first_if_present(da: xr.DataArray, dim: str, idx: int = 0) -> xr.Dat
 def _squeeze_safe(da: xr.DataArray) -> xr.DataArray:
     return da.squeeze(drop=True)
 
-def _infer_tile_hw_from_montage_image(img: xr.DataArray) -> tuple[int, int]:
+def _infer_tile_hw_from_montage_image(m_or_ref: xr.Dataset | xr.DataArray) -> tuple[int, int]:
     """
-    Montage image dims should include r,c where:
-      r is a MultiIndex of (montage_row, y)
-      c is a MultiIndex of (montage_col, x)
-    So y/x appear as coords even if not dims.
+    Robustly infer per-tile (height, width) from montage object with dims r,c.
+    Works even when r/c indexes are not MultiIndex.
     """
-    if "y" not in img.coords or "x" not in img.coords:
-        raise ValueError("Expected montage image to have coords 'y' and 'x' (from stacked r/c).")
-    y_vals = np.unique(img.coords["y"].values)
-    x_vals = np.unique(img.coords["x"].values)
-    return int(len(y_vals)), int(len(x_vals))
+    obj = m_or_ref
+    if "r" not in obj.sizes or "c" not in obj.sizes:
+        raise ValueError("Expected montage object to have 'r' and 'c' dims.")
+
+    # If montage_row/col are explicit dims (square montage unstack kept them), use them
+    n_mr = int(getattr(obj, "sizes", {}).get("montage_row", 0) or 0)
+    n_mc = int(getattr(obj, "sizes", {}).get("montage_col", 0) or 0)
+
+    # If not dims, they should still exist as coords on r/c (because r=(montage_row,y))
+    if n_mr == 0:
+        if hasattr(obj, "coords") and "montage_row" in obj.coords:
+            n_mr = len(np.unique(np.asarray(obj.coords["montage_row"].values)))
+        else:
+            raise ValueError("Cannot infer montage_row count; missing montage_row.")
+    if n_mc == 0:
+        if hasattr(obj, "coords") and "montage_col" in obj.coords:
+            n_mc = len(np.unique(np.asarray(obj.coords["montage_col"].values)))
+        else:
+            raise ValueError("Cannot infer montage_col count; missing montage_col.")
+
+    tile_h = int(obj.sizes["r"] // max(n_mr, 1))
+    tile_w = int(obj.sizes["c"] // max(n_mc, 1))
+
+    return tile_h, tile_w
 
 def _tile_values_to_pixel_image(tile_vals: np.ndarray, tile_h: int, tile_w: int) -> np.ndarray:
     """
@@ -192,9 +208,9 @@ def montage_viewer(
         z-slice to show if z is present.
     viewer : napari.Viewer, optional
         If provided, add layers into this viewer; otherwise create a new one.
-    image_contrast : ContrastSpec
-        Percentiles for image layers (default 2–98).
-    tile_overlay_contrast : ContrastSpec
+    image_contrast : 
+        Percentiles for image layers (default 0–99.5). 
+    tile_overlay_contrast : 
         Percentiles for tile overlays (default 5–95).
     tile_overlay_opacity : float
         Opacity used for tile overlays and labels.
@@ -210,9 +226,9 @@ def montage_viewer(
     """
     from .plot import montage
     if image_contrast is None:
-        image_contrast = ContrastSpec(0.5, 99.5)
+        image_contrast = (0.0, 99.5)
     if tile_overlay_contrast is None:
-        tile_overlay_contrast = ContrastSpec(5, 95)
+        tile_overlay_contrast = (5.0, 95.0)
     colormaps = colormaps or {}
 
     # Build montage once
@@ -246,12 +262,14 @@ def montage_viewer(
     ref = _select_first_if_present(ref, "z", z_index)
     ref = _select_first_if_present(ref, "ch", ch)
     # Ensure (t,r,c) ordering if t exists
+    # Ensure (..., t, r, c) ordering if t exists; preserve extra dims (exp/cell/rep/...) as leading sliders
     if "t" in ref.dims:
-        ref = ref.transpose("t", "r", "c", missing_dims="ignore")
+        ref = ref.transpose(..., "t", "r", "c", missing_dims="ignore")
     else:
-        ref = ref.transpose("r", "c", missing_dims="ignore")
+        ref = ref.transpose(..., "r", "c", missing_dims="ignore")
 
-    tile_h, tile_w = _infer_tile_hw_from_montage_image(ref)
+
+    tile_h, tile_w = _infer_tile_hw_from_montage_image(m)
 
     # Helper: get a 3D (t, montage_row, montage_col) grid of tile ids for square montage,
     # or 1D ids for rectangular montage.
@@ -275,10 +293,12 @@ def montage_viewer(
 
         da, ch_mode = _select_channels(da, ch)
 
+        # Preserve extra dims as leading sliders
         if "t" in da.dims:
-            da = da.transpose("t", "r", "c", "ch", missing_dims="ignore")
+            da = da.transpose(..., "t", "r", "c", "ch", missing_dims="ignore")
         else:
-            da = da.transpose("r", "c", "ch", missing_dims="ignore")
+            da = da.transpose(..., "r", "c", "ch", missing_dims="ignore")
+
 
         data = np.asarray(da.data)
 
@@ -299,6 +319,7 @@ def montage_viewer(
             )
 
         else:
+            print("DEBUG image_contrast:", type(image_contrast), image_contrast)
             lo, hi = _normalize_image_contrast(image_contrast)
             clim = _robust_limits_nonneg(
                 np.asarray(da.data),
@@ -320,10 +341,12 @@ def montage_viewer(
         da = _squeeze_safe(da)
         da = _select_first_if_present(da, "z", z_index)
         da = _select_first_if_present(da, "ch", ch)
+        # Preserve extra dims as leading sliders
         if "t" in da.dims:
-            da = da.transpose("t", "r", "c", missing_dims="ignore")
+            da = da.transpose(..., "t", "r", "c", missing_dims="ignore")
         else:
-            da = da.transpose("r", "c", missing_dims="ignore")
+            da = da.transpose(..., "r", "c", missing_dims="ignore")
+
 
         lbl = (da > 0).astype(np.uint8).data
         lyr = viewer.add_labels(
@@ -465,4 +488,952 @@ def montage_viewer(
     return viewer, layers
 
 
+#-------------------------------------------------------------------------
+# Manual interactive filter labeling on montage tiles
+# #-------------------------------------------------------------------------
 
+def _default_save_path(ds: xr.Dataset, *, fallback: str | None = None) -> str | None:
+    """
+    Infer a default save path. SAFER default: never overwrite the source .nc;
+    instead write a sidecar file with suffix '_manual.nc'.
+    """
+    src = None
+    try:
+        src = ds.encoding.get("source", None)
+    except Exception:
+        src = None
+
+    if isinstance(src, str) and len(src) > 0:
+        if src.endswith(".nc"):
+            return src[:-3] + "_manual.nc"
+        return src + "_manual"
+
+    return fallback
+
+def _add_manual_filter_save_widget(
+    viewer: napari.Viewer,
+    *,
+    ds: xr.Dataset,
+    filter_table: xr.DataArray,
+    filter_name: str,
+) -> None:
+    """
+    Save button that ONLY commits the current filter_table into the in-memory dataset:
+        ds[filter_name] = filter_table
+    No disk I/O.
+    """
+    try:
+        from magicgui import magicgui
+        from napari.utils.notifications import show_info
+    except Exception:
+        return
+
+    @magicgui(call_button="Save (to my_ta only)", layout="vertical")
+    def _save_widget():
+        ds[filter_name] = filter_table
+        show_info(f"Committed '{filter_name}' into the in-memory dataset (my_ta.ds).")
+
+    viewer.window.add_dock_widget(_save_widget, name=f"{filter_name} commit", area="right")
+
+def _infer_tile_dim(ds: xr.Dataset) -> str:
+    if "track_id" in ds.dims:
+        return "track_id"
+    if "n" in ds.dims:
+        return "n"
+    raise ValueError("Expected dataset to have either 'track_id' or 'n' dimension.")
+
+def _ensure_filter_table(
+    ds: xr.Dataset, *, filter_name: str, tile_dim: str
+) -> xr.DataArray:
+    """
+    Return a uint8 filter table with dims (tile_dim, t).
+    If ds[filter_name] exists, it is validated and returned.
+    Otherwise a new zero table is created (not inserted into ds here).
+    """
+    if "t" not in ds.dims:
+        raise ValueError("manual_filter_montage expects a 't' dimension in the dataset.")
+
+    if filter_name in ds:
+        ft = ds[filter_name]
+        if tile_dim not in ft.dims or "t" not in ft.dims:
+            raise ValueError(
+                f"Existing filter {filter_name!r} must include dims ({tile_dim!r}, 't'). "
+                f"Got {ft.dims}."
+            )
+        return ft.astype(np.uint8)
+
+    ft = xr.DataArray(
+        np.zeros((ds.sizes[tile_dim], ds.sizes["t"]), dtype=np.uint8),
+        dims=(tile_dim, "t"),
+        coords={tile_dim: ds.coords[tile_dim].values, "t": ds.coords["t"].values},
+        name=filter_name,
+    )
+    return ft
+
+def _indexer_for_coord(da: xr.DataArray, dim: str, value) -> int:
+    """Return integer index into da[dim] for coordinate value."""
+    # Prefer pandas index if available
+    try:
+        idx = da.get_index(dim)
+        return int(idx.get_loc(value))
+    except Exception:
+        # fall back to numpy search
+        vals = np.asarray(da.coords[dim].values)
+        hit = np.where(vals == value)[0]
+        if hit.size == 0:
+            raise KeyError(f"Value {value!r} not found in coordinate {dim!r}.")
+        return int(hit[0])
+
+def _overlay_pixels_from_filter_table(
+    *,
+    m: xr.Dataset,
+    filter_table: xr.DataArray,
+    tile_dim: str,
+    row: str,
+    col: str,
+    tile_h: int,
+    tile_w: int,
+) -> xr.DataArray:
+    """
+    Build a pixel-space overlay DataArray aligned to montage (r,c) and optionally t.
+    Returned dims match the montage reference convention:
+      - square montages typically have dims including 't','r','c'
+      - row=tile_dim col='t' typically has dims including 'r','c' (no 't' dim)
+    """
+    square = (row == col)
+
+    if square:
+        tile_id_2d = m.coords["tile_id"]  # (montage_row, montage_col)
+        ids = np.asarray(tile_id_2d.values)
+        Mrow, Mcol = ids.shape
+
+        # Compute per-tile pixel size from total montage size
+        tile_h = int(m.sizes["r"] // max(Mrow, 1))
+        tile_w = int(m.sizes["c"] // max(Mcol, 1))
+
+
+        ft = filter_table.transpose(tile_dim, "t")  # (tile_dim, t)
+
+        # Build a lookup from tile_dim value -> row index in ft
+        tile_vals = np.asarray(ft.coords[tile_dim].values)
+        tile_to_i = {v: i for i, v in enumerate(tile_vals)}
+
+        ids = np.asarray(tile_id_2d.values)  # (Mrow, Mcol)
+        Mrow, Mcol = ids.shape
+        T = ft.sizes["t"]
+
+        # Gather (t, Mrow, Mcol) values, filling missing/padded tiles with 0
+        tv = np.zeros((T, Mrow, Mcol), dtype=np.uint8)
+        ft_data = np.asarray(ft.data)  # (tile_dim, t)
+
+        for mr in range(Mrow):
+            for mc in range(Mcol):
+                tid = ids[mr, mc]
+                i = tile_to_i.get(tid, None)
+                if i is None:
+                    continue  # leave zeros for padded/unknown tiles
+                tv[:, mr, mc] = ft_data[i, :]
+
+
+        # print("DEBUG m.sizes r,c:", m.sizes["r"], m.sizes["c"])
+        # print("DEBUG Mrow,Mcol:", Mrow, Mcol)
+        # print("DEBUG tile_h,tile_w:", tile_h, tile_w)
+        # print("DEBUG tv shape:", tv.shape)   # should be (T, Mrow, Mcol)
+        pix = _tile_values_to_pixel_image(tv, tile_h, tile_w)  # (t, R, C)
+        # print("DEBUG pix shape:", pix.shape)  # should be (T, m.sizes["r"], m.sizes["c"])
+        assert pix.shape[1] == m.sizes["r"], (pix.shape, m.sizes["r"], tile_h, Mrow)
+        assert pix.shape[2] == m.sizes["c"], (pix.shape, m.sizes["c"], tile_w, Mcol)
+
+
+        out = xr.DataArray(
+            pix.astype(np.uint8),
+            dims=("t", "r", "c"),
+            coords={"t": m.coords["t"].values, "r": m.coords["r"].values, "c": m.coords["c"].values},
+            name=filter_table.name,
+        )
+        return out
+
+
+
+    # Rectangular montage: expect tile_row_id (montage_row) and tile_col_id (montage_col)
+    tile_row_id = m.coords.get("tile_row_id", None)
+    tile_col_id = m.coords.get("tile_col_id", None)
+    if tile_row_id is None or tile_col_id is None:
+        raise ValueError("Rectangular montage expected coords 'tile_row_id' and 'tile_col_id'.")
+
+    if col == "t":
+        # Map each (montage_row, montage_col) -> (tile_dim, t) from row_id and col_id
+        row_sel = filter_table.sel({tile_dim: tile_row_id})  # dims (montage_row, t)
+        grid = row_sel.sel(t=tile_col_id)  # dims (montage_row, montage_col)
+        pix = _tile_values_to_pixel_image(np.asarray(grid.data), tile_h, tile_w)  # (R, C)
+
+        out = xr.DataArray(
+            pix.astype(np.uint8),
+            dims=("r", "c"),
+            coords={"r": m.coords["r"].values, "c": m.coords["c"].values},
+            name=filter_table.name,
+        )
+        return out
+
+    # Other rectangular layouts: not requested right now.
+    raise NotImplementedError(
+        "manual_filter_montage currently supports rectangular montages only when col == 't'."
+    )
+
+def _broadcast_overlay_like_ref(overlay: xr.DataArray, ref: xr.DataArray) -> np.ndarray:
+    """
+    Make overlay match ref's dimensionality by adding missing dims via expand_dims
+    and ordering dims like ref. Avoid xarray coordinate alignment because montage
+    r/c can be Index vs MultiIndex even when values match.
+    Returns a numpy array suitable for napari (uint8).
+    """
+    out = overlay
+
+    # If overlay has t but ref doesn't, take current t=0 by default
+    if "t" in out.dims and "t" not in ref.dims:
+        out = out.isel(t=0)
+
+    # Add any missing dims from ref (size 1)
+    for d in ref.dims:
+        if d not in out.dims:
+            out = out.expand_dims({d: ref.sizes[d]})
+            # expand_dims with size sets length, but values are broadcast later by numpy
+
+    # Reorder to match ref dims
+    out = out.transpose(*ref.dims, missing_dims="ignore")
+
+    # Finally broadcast by numpy, not xarray
+    data = np.asarray(out.data)
+    target_shape = tuple(ref.sizes[d] for d in ref.dims)
+
+    # If needed, broadcast to target shape
+    if data.shape != target_shape:
+        data = np.broadcast_to(data, target_shape)
+
+    return data.astype(np.uint8)
+
+def manual_filter_montage(
+    ds: xr.Dataset,
+    *,
+    row: str,
+    col: str,
+    filter_name: str = "manual_filter",
+    show: Iterable[str] = ("best_z", "ch0_mask"),
+    ch: int | list[int] | tuple[int, ...] = 0,
+    z_index: int = 0,
+    viewer: napari.Viewer | None = None,
+    write_back: bool = True,
+    overlay_opacity: float = 0.35,
+    single_click_delay_ms: int = 100,
+) -> tuple[napari.Viewer, dict[str, Any], xr.DataArray]:
+    """
+    Interactive manual labeling of montage tiles into a binary filter table of shape (tile_dim, t).
+
+    Minimal interactions (no paint mode):
+      - click: toggle tile (0 <-> 1)   [single-click is delayed to avoid double-click conflicts]
+      - Shift+click: toggle entire montage_row
+
+    """
+    from .plot import montage  # lazy import to avoid circulars
+
+    # --- Qt timer (for "delayed single click" so double-click doesn't trigger toggles) ---
+    try:
+        from qtpy.QtCore import QTimer
+    except Exception:
+        QTimer = None
+
+    tile_dim = _infer_tile_dim(ds)
+
+    # Any dims we want to *preserve as context* (exp/cell/rep/fov/...)
+    # i.e. dims that are neither pixels nor the filter axes.
+    _non_context = {
+        tile_dim, "t",
+        "y", "x", "r", "c", "z", "ch",
+        "montage_row", "montage_col", "montage",
+    }
+    context_dims = [d for d in ds.dims if d not in _non_context]
+
+    def _ensure_filter_table_contextual(ds: xr.Dataset, *, filter_name: str, tile_dim: str, context_dims: list[str]) -> xr.DataArray:
+        """
+        Ensure ds has a filter table with dims: (*context_dims, tile_dim, t).
+        If ds[filter_name] exists, return it (after basic sanity checks).
+        Otherwise create zeros with coords from ds.
+        """
+        if filter_name in ds:
+            ft = ds[filter_name]
+            # Must include tile_dim and t; context dims are optional but if present should match
+            if tile_dim not in ft.dims or "t" not in ft.dims:
+                raise ValueError(f"{filter_name!r} exists but missing dims {tile_dim!r} and/or 't'. Got {ft.dims}")
+            return ft.astype(np.uint8)
+
+        # Build coords
+        coords = {}
+        for d in context_dims:
+            coords[d] = ds.coords[d].values if d in ds.coords else np.arange(ds.sizes[d])
+        coords[tile_dim] = ds.coords[tile_dim].values if tile_dim in ds.coords else np.arange(ds.sizes[tile_dim])
+        coords["t"] = ds.coords["t"].values if "t" in ds.coords else np.arange(ds.sizes["t"])
+
+        shape = tuple(len(coords[d]) for d in context_dims) + (len(coords[tile_dim]), len(coords["t"]))
+        data = np.zeros(shape, dtype=np.uint8)
+
+        return xr.DataArray(
+            data,
+            dims=tuple(context_dims) + (tile_dim, "t"),
+            coords=coords,
+            name=filter_name,
+        )
+
+    # Base (committed) table from ds if present, else zeros
+    filter_table_committed = _ensure_filter_table_contextual(
+        ds, filter_name=filter_name, tile_dim=tile_dim, context_dims=context_dims
+    )
+
+    # Staged table: all edits happen here until user clicks Save/Update
+    filter_table = filter_table_committed.copy(deep=True).astype(np.uint8)
+
+
+    # Build montage view with your existing viewer helper
+    viewer, layers = montage_viewer(
+        ds,
+        row=row,
+        col=col,
+        show=show,
+        ch=ch,
+        z_index=z_index,
+        viewer=viewer,
+    )
+
+    # Rebuild montage locally (montage_viewer doesn't return it)
+    m = montage(ds, row=row, col=col)
+
+    # Choose a reference image layer to infer tile sizes AND to match dims for overlays
+    ref_name = None
+    for nm in ("best_z", "int"):
+        if nm in m.data_vars:
+            da0 = _squeeze_safe(m[nm])
+            if "r" in da0.dims and "c" in da0.dims:
+                ref_name = nm
+                break
+    if ref_name is None:
+        for nm in list(m.data_vars):
+            da0 = _squeeze_safe(m[nm])
+            if "r" in da0.dims and "c" in da0.dims:
+                ref_name = nm
+                break
+    if ref_name is None:
+        raise ValueError("Could not find any montage variable with dims including ('r','c') to anchor the view.")
+
+    ref = _squeeze_safe(m[ref_name])
+    ref = _select_first_if_present(ref, "z", z_index)
+    if "ch" in ref.dims:
+        ref = _select_first_if_present(ref, "ch", (ch[0] if isinstance(ch, (list, tuple)) else ch))
+
+    # Preserve extra dims (exp/cell/rep/fov/...) as leading sliders
+    if "t" in ref.dims:
+        ref = ref.transpose(..., "t", "r", "c", missing_dims="ignore")
+    else:
+        ref = ref.transpose(..., "r", "c", missing_dims="ignore")
+
+
+    tile_h, tile_w = _infer_tile_hw_from_montage_image(m)
+
+    # tile_id grid for square montage
+    tile_id_grid = np.asarray(m.coords["tile_id"].values) if "tile_id" in m.coords else None
+    Mrow = int(m.sizes.get("montage_row", 0) or 0)
+    Mcol = int(m.sizes.get("montage_col", 0) or 0)
+    if Mrow == 0:
+        if "montage_row" in m.coords:
+            Mrow = int(len(np.unique(np.asarray(m.coords["montage_row"].values))))
+    if Mcol == 0:
+        if "montage_col" in m.coords:
+            Mcol = int(len(np.unique(np.asarray(m.coords["montage_col"].values))))
+
+    # ---- context selection from napari sliders ----
+    ref_dims = list(ref.dims)
+    def _current_context_isel() -> dict[str, int]:
+        """
+        Return {dim: index} for context dims using napari slider positions
+        (if dim is present in the displayed ref).
+        """
+        out = {}
+        for d in context_dims:
+            if d in ref_dims:
+                ax = ref_dims.index(d)
+                out[d] = int(viewer.dims.current_step[ax])
+            else:
+                out[d] = 0
+        return out
+
+    def _view_filter_table() -> xr.DataArray:
+        """2D view (tile_dim, t) at the current context."""
+        sel = _current_context_isel()
+        if sel:
+            return filter_table.isel(sel)
+        return filter_table
+
+
+    # # Build initial overlay from filter_table and add as labels
+    # overlay = _overlay_pixels_from_filter_table(
+    #     m=m,
+    #     filter_table=_view_filter_table(),   # <- IMPORTANT (2D slice)
+    #     tile_dim=tile_dim,
+    #     row=row,
+    #     col=col,
+    #     tile_h=tile_h,
+    #     tile_w=tile_w,
+    # )
+
+    # overlay_np = _broadcast_overlay_like_ref(overlay, ref)
+    def _overlay_np_for_all_contexts() -> np.ndarray:
+        """
+        Build a labels array aligned to `ref` (including exp/cell/rep/...) by
+        filling each context slice from the corresponding slice of `filter_table`.
+        """
+        # Start from zeros in the full ref shape
+        out = np.zeros(tuple(ref.sizes[d] for d in ref.dims), dtype=np.uint8)
+
+        # If there are no context dims, keep old fast path
+        if not context_dims:
+            ov = _overlay_pixels_from_filter_table(
+                m=m,
+                filter_table=_view_filter_table(),
+                tile_dim=tile_dim,
+                row=row,
+                col=col,
+                tile_h=tile_h,
+                tile_w=tile_w,
+            )
+            return _broadcast_overlay_like_ref(ov, ref).astype(np.uint8)
+
+        # Iterate over all context index combinations (usually small: exp=2, etc.)
+        from itertools import product
+        ranges = [range(int(ref.sizes[d])) if d in ref.dims else range(1) for d in context_dims]
+
+        for combo in product(*ranges):
+            # Build isel dict for filter_table and for the output array
+            ctx_isel = {d: combo[i] for i, d in enumerate(context_dims) if d in filter_table.dims}
+            ft2 = filter_table.isel(ctx_isel)  # -> (tile_dim, t)
+
+            ov = _overlay_pixels_from_filter_table(
+                m=m,
+                filter_table=ft2,
+                tile_dim=tile_dim,
+                row=row,
+                col=col,
+                tile_h=tile_h,
+                tile_w=tile_w,
+            )
+            ov_np = _broadcast_overlay_like_ref(ov, ref).astype(np.uint8)
+
+            # Now write ONLY into this context slice of `out`
+            sl = [slice(None)] * out.ndim
+            for d, idx in ctx_isel.items():
+                if d in ref.dims:
+                    sl[ref.dims.index(d)] = int(idx)
+
+            out[tuple(sl)] = ov_np[tuple(sl)]
+
+        return out
+
+    # Build initial overlay from the staged table across ALL contexts
+    overlay_np = _overlay_np_for_all_contexts()
+
+
+    lbl_layer = viewer.add_labels(
+        overlay_np.astype(np.uint8),
+        name=filter_name,
+        opacity=overlay_opacity,
+    )
+    # ------------------------------------------------------------
+    # Debug overlay: shows mapping info when clicking a tile
+    # ------------------------------------------------------------
+    # click_info = viewer.add_points(
+    #     np.zeros((0, overlay_np.ndim), dtype=float),
+    #     name="click_info",
+    #     size=0.0,  # hide point marker, show text only
+    # )
+    # # Hide point glyphs; text only
+    # if hasattr(click_info, "face_color"):
+    #     click_info.face_color = "transparent"
+    # if hasattr(click_info, "edge_color"):
+    #     click_info.edge_color = "transparent"
+
+
+    # # Configure text rendering
+    # click_info.text = {
+    #     "string": "{label}",
+    #     "size": 12,
+    #     "anchor": "center",
+    # }
+
+    # layers["click_info"] = click_info
+
+    # Make label=1 visible
+    try:
+        lbl_layer.color = {1: "yellow"}
+    except Exception:
+        lbl_layer.color = {1: np.array([1.0, 1.0, 0.0, 1.0])}
+
+    # IMPORTANT: do NOT enter paint mode; avoid editing gestures
+    lbl_layer.editable = False
+    try:
+        lbl_layer.mode = "pan_zoom"
+    except Exception:
+        pass
+
+    layers[filter_name] = lbl_layer
+
+    # Helpers
+    square = (row == col)
+    tile_row_id = m.coords.get("tile_row_id", None)
+    tile_col_id = m.coords.get("tile_col_id", None)
+
+    ref_dims = list(ref.dims)
+    r_axis = ref_dims.index("r")
+    c_axis = ref_dims.index("c")
+    t_axis = ref_dims.index("t") if "t" in ref_dims else None
+
+    tile_index = {v: i for i, v in enumerate(filter_table.coords[tile_dim].values)}
+    t_index = {v: i for i, v in enumerate(filter_table.coords["t"].values)}
+
+    def _set_filter_value(tile_val, t_val, value: int):
+        if tile_val in tile_index and t_val in t_index:
+            filter_table.values[tile_index[tile_val], t_index[t_val]] = np.uint8(value)
+
+    def _paint_tile_pixel(mr: int, mc: int, value: int, *, t_idx_for_pixels: int | None):
+        r0, r1 = mr * tile_h, (mr + 1) * tile_h
+        c0, c1 = mc * tile_w, (mc + 1) * tile_w
+
+        data = lbl_layer.data
+        sl = [slice(None)] * data.ndim
+
+        # --- NEW: restrict painting to the current context slice (exp/cell/rep/...) ---
+        ctx = _current_context_isel()  # uses viewer sliders + ref_dims
+        for d, i in ctx.items():
+            if d in ref_dims:
+                sl[ref_dims.index(d)] = int(i)
+
+        # Pixel window
+        sl[r_axis] = slice(r0, r1)
+        sl[c_axis] = slice(c0, c1)
+
+        # Time plane
+        if t_axis is not None:
+            if t_idx_for_pixels is None:
+                raise ValueError("t_idx_for_pixels is required when label data has a 't' axis.")
+            sl[t_axis] = int(t_idx_for_pixels)
+
+        data[tuple(sl)] = value
+        lbl_layer.data = data
+        lbl_layer.refresh()
+
+
+    def _update_click_info(
+        *,
+        mr: int,
+        mc: int,
+        tile_val,
+        t_val,
+        t_idx_for_pixels: int | None,
+        display_tile_label: str | None = None,
+        track_id_orig=None,
+    ):
+        """
+        Place a text label at the center of the clicked montage tile showing
+        montage indices and underlying identity.
+        """
+        # Center of the clicked tile in pixel space
+        y = mr * tile_h + tile_h / 2
+        x = mc * tile_w + tile_w / 2
+
+        pt = np.zeros((1, overlay_np.ndim), dtype=float)
+
+        # If montage includes time as an axis, place the point in the current frame plane
+        if t_axis is not None:
+            pt[0, t_axis] = float(t_idx_for_pixels) if t_idx_for_pixels is not None else 0.0
+
+        pt[0, r_axis] = y
+        pt[0, c_axis] = x
+
+        click_info.data = pt
+
+        # Prefer displaying the grid-pair label if provided
+        disp = display_tile_label if display_tile_label is not None else str(tile_val)
+
+        label_lines = [
+            f"grid_rc={disp}   f={t_val}",
+            f"track_id_orig={track_id_orig}" if track_id_orig is not None else "track_id_orig=None",
+            f"montage (row,col)=({mr},{mc})",
+        ]
+
+        if track_id_orig is not None:
+            label_lines.insert(1, f"track_id_orig={track_id_orig}")
+
+        click_info.features = {"label": np.array(["\n".join(label_lines)], dtype=object)}
+        click_info.refresh()
+
+
+    def _paint_row_pixels(mr: int, value: int, *, t_idx_for_pixels: int | None):
+        for mc in range(Mcol):
+            _paint_tile_pixel(mr, mc, value, t_idx_for_pixels=t_idx_for_pixels)
+
+    # --- delayed single-click state ---
+    click_state = {
+        "timer": None,
+        "pending": False,
+        "payload": None,  # (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_val)
+    }
+
+    def _apply_toggle_or_row(payload):
+        """
+        payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table)
+
+        Updates staged `filter_table` at the CURRENT context (exp/cell/rep/fov sliders),
+        and updates the displayed overlay pixels in napari.
+        """
+        nonlocal dirty
+
+        mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table = payload
+
+        # Clamp time
+        T = int(filter_table.sizes["t"])
+        t_idx_for_table = int(np.clip(int(t_idx_for_table), 0, max(0, T - 1)))
+        t_idx_for_pixels = int(np.clip(int(t_idx_for_pixels), 0, max(0, T - 1)))
+
+        ctx = _current_context_isel()  # {exp: i, cell: j, ...}
+
+        # Build a numpy index tuple into filter_table.data
+        # dims: (*context_dims, tile_dim, t)
+        def _idx(tile_i: int, t_i: int):
+            parts = []
+            for d in context_dims:
+                parts.append(ctx.get(d, 0))
+            parts.append(tile_i)
+            parts.append(t_i)
+            return tuple(parts)
+
+        # Map tile_val -> positional index along tile_dim
+        # (tile_val is the true track_id coordinate value, not an index)
+        try:
+            tile_i = int(np.where(filter_table.coords[tile_dim].values == tile_val)[0][0])
+        except Exception:
+            # If coordinate values aren’t unique or something odd, fall back to dict lookup
+            tile_index = {v: i for i, v in enumerate(filter_table.coords[tile_dim].values)}
+            if tile_val not in tile_index:
+                return
+            tile_i = tile_index[tile_val]
+
+        # --- SHIFT: toggle the whole track (tile) across ALL t, but only in this context ---
+        if shift_down:
+            cur = int(filter_table.data[_idx(tile_i, t_idx_for_table)])
+            new = 0 if cur == 1 else 1
+
+            # set all t for this tile in this context
+            for ti in range(T):
+                filter_table.data[_idx(tile_i, ti)] = np.uint8(new)
+
+            dirty = True
+
+            # Paint: for square montage you already decided to paint same tile across all frames
+            if square:
+                for ti in range(T):
+                    _paint_tile_pixel(mr, mc, new, t_idx_for_pixels=ti)
+                return
+
+            # # Non-square: rebuild overlay for this context only
+            # overlay = _overlay_pixels_from_filter_table(
+            #     m=m,
+            #     filter_table=_view_filter_table(),
+            #     tile_dim=tile_dim,
+            #     row=row,
+            #     col=col,
+            #     tile_h=tile_h,
+            #     tile_w=tile_w,
+            # )
+            # overlay_np = _broadcast_overlay_like_ref(overlay, ref)
+            # lbl_layer.data = overlay_np.astype(np.uint8)
+            # lbl_layer.refresh()
+            # return
+            overlay = _overlay_pixels_from_filter_table(
+                m=m,
+                filter_table=_view_filter_table(),
+                tile_dim=tile_dim,
+                row=row,
+                col=col,
+                tile_h=tile_h,
+                tile_w=tile_w,
+            )
+            overlay_np = _broadcast_overlay_like_ref(overlay, ref).astype(np.uint8)
+
+            # write overlay_np into just the current context slice
+            data = lbl_layer.data
+            sl = [slice(None)] * data.ndim
+            ctx = _current_context_isel()
+            for d, i in ctx.items():
+                if d in ref_dims:
+                    sl[ref_dims.index(d)] = int(i)
+            data[tuple(sl)] = overlay_np[tuple(sl)]
+            lbl_layer.data = data
+            lbl_layer.refresh()
+            return
+
+
+        # --- Normal click: toggle single (tile, t) in this context ---
+        cur = int(filter_table.data[_idx(tile_i, t_idx_for_table)])
+        new = 0 if cur == 1 else 1
+        filter_table.data[_idx(tile_i, t_idx_for_table)] = np.uint8(new)
+        dirty = True
+
+        _paint_tile_pixel(mr, mc, new, t_idx_for_pixels=t_idx_for_pixels)
+
+
+
+
+    dirty = False  # staged edits not yet committed to ds
+
+
+    def _write_filter_table_back():
+        nonlocal dirty
+        # Write the full contextual filter table back
+        ds[filter_name] = filter_table.astype(np.uint8)
+        dirty = False
+
+
+    def _clear_filter_table():
+        """Clear staged edits only (does not touch ds)."""
+        nonlocal dirty
+
+        # Clear ONLY the current context slice (exp/cell/rep/...)
+        ctx = _current_context_isel()
+        if ctx:
+            # Only keep dims that actually exist on filter_table
+            ft_ctx = {d: int(i) for d, i in ctx.items() if d in filter_table.dims}
+            if ft_ctx:
+                filter_table.loc[ft_ctx] = 0
+            else:
+                # no matching context dims on filter_table -> clear all
+                filter_table.loc[:] = 0
+        else:
+            filter_table.loc[:] = 0
+
+        dirty = True
+
+        # Rebuild overlay pixels from the current context slice
+        overlay = _overlay_pixels_from_filter_table(
+            m=m,
+            filter_table=_view_filter_table(),  # must return (tile_dim, t) slice
+            tile_dim=tile_dim,
+            row=row,
+            col=col,
+            tile_h=tile_h,
+            tile_w=tile_w,
+        )
+        overlay_np = _broadcast_overlay_like_ref(overlay, ref).astype(np.uint8)
+
+        # Write overlay into just the current context slice of the labels layer
+        data = lbl_layer.data
+        sl = [slice(None)] * data.ndim
+        for d, i in ctx.items():
+            if d in ref_dims:
+                sl[ref_dims.index(d)] = int(i)
+
+        data[tuple(sl)] = overlay_np[tuple(sl)]
+        lbl_layer.data = data
+        lbl_layer.refresh()
+
+
+
+
+
+    def _tile_id_orig_from_m(*, mr: int, mc: int):
+        """
+        For square montages (row == col), return the true underlying identity from
+        the 2D tile_id grid (robust even after stacking).
+        """
+        if tile_id_grid is None:
+            return None
+        try:
+            return tile_id_grid[mr, mc].item() if hasattr(tile_id_grid[mr, mc], "item") else tile_id_grid[mr, mc]
+        except Exception:
+            return None
+
+    def _track_id_orig_from_grid(*, mr: int, mc: int):
+        """
+        Undo square-packing for row==col=='track_id' montages.
+
+        Returns the *true* ds track_id coord value for the tile at (mr, mc),
+        or None if that tile is padding/out of range.
+        """
+        if row != col:
+            return None
+        if row != "track_id":
+            return None
+        if "track_id" not in ds.dims:
+            return None
+
+        n_tiles = int(ds.sizes["track_id"])
+        S = int(np.ceil(np.sqrt(n_tiles)))
+        k = int(mr) * S + int(mc)
+
+        if k < 0 or k >= n_tiles:
+            return None
+
+        v = ds.coords["track_id"].values[k]
+        try:
+            return v.item()
+        except Exception:
+            return v
+
+
+    @lbl_layer.mouse_drag_callbacks.append
+    def _on_click(layer, event):
+        # Only act on mouse press
+        if event.type != "mouse_press":
+            yield
+            return
+
+        # Cancel pending single-click if this is the 2nd click (double-click => do nothing)
+        if QTimer is not None and click_state["pending"]:
+            try:
+                click_state["timer"].stop()
+            except Exception:
+                pass
+            click_state["pending"] = False
+            click_state["payload"] = None
+            yield
+            return
+
+        data_pos = layer.world_to_data(event.position)
+
+        # Pixel coords in montage canvas (r/c axes in data coords)
+        ry = int(np.clip(int(round(data_pos[r_axis])), 0, m.sizes["r"] - 1))
+        cx = int(np.clip(int(round(data_pos[c_axis])), 0, m.sizes["c"] - 1))
+
+        mr = int(np.clip(ry // tile_h, 0, max(0, Mrow - 1)))
+        mc = int(np.clip(cx // tile_w, 0, max(0, Mcol - 1)))
+
+        # --- identity from montage coordinate mappings ---
+        row_val = tile_row_id.values[mr] if tile_row_id is not None else mr
+        col_val = tile_col_id.values[mc] if tile_col_id is not None else mc
+
+        mods = set(getattr(event, "modifiers", ()) or ())
+        shift_down = ("Shift" in mods)
+
+        # --- current time index in the displayed montage/ref ---
+        # Use the computed t_axis (ref dims order), not "axis 0".
+        if t_axis is not None:
+            t_idx = int(viewer.dims.current_step[t_axis])
+        else:
+            t_idx = 0
+
+        # Clamp to valid range for safety
+        T = int(filter_table.sizes["t"])
+        t_idx = int(np.clip(t_idx, 0, max(0, T - 1)))
+
+        # These are what your debug overlay expects:
+        # - t_val is what you display as "f"
+        # - t_idx_for_pixels is what you use to index the labels layer plane
+        t_val = t_idx
+        t_idx_for_pixels = t_idx
+
+        # Determine tile identity and debug label
+        if square:
+            # grid_rc is purely for display/debug
+            debug_tile_label = f"{mr},{mc}"
+
+            # True track id from the original ds (NOT the grid coords)
+            track_id_orig = _track_id_orig_from_grid(mr=mr, mc=mc)
+
+            # If this is a padded tile, ignore clicks
+            if track_id_orig is None:
+                yield
+                return
+
+            # This is what we use for filter_table indexing / saving back to ds
+            tile_val = track_id_orig
+
+        else:
+            tile_val = int(row_val)
+            debug_tile_label = str(tile_val)
+            track_id_orig = None
+
+
+
+        # # Update debug overlay (text only)
+        # _update_click_info(
+        #     mr=mr,
+        #     mc=mc,
+        #     tile_val=tile_val,
+        #     t_val=t_idx,                 # use the slider index as f
+        #     t_idx_for_pixels=t_idx,
+        #     display_tile_label=debug_tile_label,
+        #     track_id_orig=track_id_orig,
+        # )
+
+        # payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table)
+        payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx)
+
+        # Fire immediately if no Qt timer available; otherwise delay to avoid double-click conflicts
+        if QTimer is None:
+            _apply_toggle_or_row(payload)
+            yield
+            return
+
+        click_state["pending"] = True
+        click_state["payload"] = payload
+
+        timer = QTimer()
+        click_state["timer"] = timer
+
+        def _fire():
+            if not click_state["pending"]:
+                return
+            click_state["pending"] = False
+            pl = click_state["payload"]
+            click_state["payload"] = None
+            if pl is not None:
+                _apply_toggle_or_row(pl)
+
+        timer.setSingleShot(True)
+        timer.timeout.connect(_fire)
+        timer.start(int(single_click_delay_ms))
+
+        yield
+
+    
+
+
+    from qtpy.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel
+
+    w = QWidget()
+    layout = QVBoxLayout(w)
+
+    help_lbl = QLabel(
+        "Manual filter:\n"
+        "- Click: toggle crop\n"
+        "- Shift+Click: take all frames (f)\n"
+        "- Press 'Save/Update' to write into ds\n"
+        "- Press 'Clear' to reset staged edits\n"
+    )
+    help_lbl.setWordWrap(True)
+
+    btn_save = QPushButton("Save/Update (write to ds)")
+    btn_clear = QPushButton("Clear (staged only)")
+
+    def _on_save():
+        _write_filter_table_back()
+
+    def _on_clear():
+        _clear_filter_table()
+
+    btn_save.clicked.connect(_on_save)
+    btn_clear.clicked.connect(_on_clear)
+
+    layout.addWidget(help_lbl)
+    layout.addWidget(btn_save)
+    layout.addWidget(btn_clear)
+
+    viewer.window.add_dock_widget(w, name=f"{filter_name} controls", area="right")
+
+
+    return viewer, layers, filter_table

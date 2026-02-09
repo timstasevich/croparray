@@ -66,11 +66,18 @@ class CropArrayNapari(_BaseAccessor):
     def montage_viewer(self, *args, **kwargs):
         from .napari_view import montage_viewer as _impl
         return _impl(self.ds, *args, **kwargs)
+    def manual_filter_montage(self, *args, **kwargs):
+        from .napari_view import manual_filter_montage as _impl
+        return _impl(self.ds, *args, **kwargs)
+
 
 @dataclass
 class TrackArrayNapari(_BaseAccessor):
     def montage_viewer(self, *args, **kwargs):
         from .napari_view import montage_viewer as _impl
+        return _impl(self.ds, *args, **kwargs)
+    def manual_filter_montage(self, *args, **kwargs):
+        from .napari_view import manual_filter_montage as _impl
         return _impl(self.ds, *args, **kwargs)
 
 def _install_all_accessors():
