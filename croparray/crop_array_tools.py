@@ -29,7 +29,7 @@ from .io import open_croparray, open_croparray_zarr, open_as_trackarray
 from .build import _create_crop_array_dataset, create_crop_array
 from .measure import best_z_proj, measure_signal, measure_signal_raw, mask_props
 from .plot import montage
-from .napari_view import view_montage
+from .napari_view import montage_viewer
 from .dataframe import variables_to_df
 from .tracking import (
     perform_tracking_with_exclusions,

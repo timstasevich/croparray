@@ -61,6 +61,17 @@ class CropArrayTrack(_GenCropArrayTrack):
         from .tracking import to_track_array
         return to_track_array(self.ds, *args, **kwargs)
 
+@dataclass
+class CropArrayNapari(_BaseAccessor):
+    def montage_viewer(self, *args, **kwargs):
+        from .napari_view import montage_viewer as _impl
+        return _impl(self.ds, *args, **kwargs)
+
+@dataclass
+class TrackArrayNapari(_BaseAccessor):
+    def montage_viewer(self, *args, **kwargs):
+        from .napari_view import montage_viewer as _impl
+        return _impl(self.ds, *args, **kwargs)
 
 def _install_all_accessors():
     # Local imports to avoid circular dependencies

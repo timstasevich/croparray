@@ -8,7 +8,7 @@ from ..crop_array_object import CropArray
 
 if TYPE_CHECKING:
     # Import only for type checking (avoids runtime circular imports)
-    from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure
+    from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure, TrackArrayNapari
 
 
 @dataclass
@@ -29,6 +29,7 @@ class TrackArray(CropArray):
     _tview: "TrackArrayView" = field(init=False, repr=False)
     _tdf: "TrackArrayDF" = field(init=False, repr=False)
     _tmeasure: "TrackArrayMeasure" = field(init=False, repr=False)
+    _napari: "TrackArrayNapari" = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Base initialization (attaches io/build/measure/plot/view/df/track/ops)
@@ -41,13 +42,14 @@ class TrackArray(CropArray):
             raise ValueError("TrackArray dataset must have a 'track_id' dimension")
 
         # Track-specific accessors: DO NOT overwrite base .plot/.view/.df
-        from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure
+        from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure, TrackArrayNapari
 
         # --- accessor caches (private to avoid property collisions) ---
         object.__setattr__(self, "_tplot", TrackArrayPlot(self))
         object.__setattr__(self, "_tview", TrackArrayView(self))
         object.__setattr__(self, "_tdf", TrackArrayDF(self))
         object.__setattr__(self, "_tmeasure", TrackArrayMeasure(self))
+        object.__setattr__(self, "_napari", TrackArrayNapari(self))
 
     def __repr__(self) -> str:
         sizes = self.ds.sizes
@@ -69,6 +71,10 @@ class TrackArray(CropArray):
     @property
     def tmeasure(self) -> "TrackArrayMeasure":
         return self._tmeasure
+    
+    @property
+    def napari(self):
+        return self._napari
 
     # ---- Convenience ----
     @property

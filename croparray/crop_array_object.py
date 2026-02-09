@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         CropArrayDF,
         CropArrayTrack,
         CropArrayOps,
+        CropArrayNapari,
     )
 
 @dataclass
@@ -32,6 +33,8 @@ class CropArray:
     _df: "CropArrayDF" = field(init=False, repr=False)
     _track: "CropArrayTrack" = field(init=False, repr=False)
     _ops: "CropArrayOps" = field(init=False, repr=False)
+    _napari: "CropArrayNapari" = field(init=False, repr=False)
+
 
 
     def __post_init__(self):
@@ -51,8 +54,9 @@ class CropArray:
             CropArrayDF,
             CropArrayTrack,
             CropArrayOps,
+            CropArrayNapari,
         )
-
+        object.__setattr__(self, "_napari", CropArrayNapari(self))
         object.__setattr__(self, "_io", CropArrayIO(self))
         object.__setattr__(self, "_build", CropArrayBuild(self))
         object.__setattr__(self, "_measure", CropArrayMeasure(self))
@@ -94,7 +98,10 @@ class CropArray:
     @property
     def ops(self) -> "CropArrayOps":
         return self._ops
-
+    
+    @property
+    def napari(self):
+        return self._napari
 
     def __setitem__(self, key: str, value):
         self.ds[key] = value

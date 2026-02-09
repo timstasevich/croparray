@@ -20,22 +20,46 @@ from croparray.plot import montage as _impl_CropArrayPlot_montage
 class CropArrayPlot(_BaseAccessor):
     """Generated accessor methods."""
     def montage(self, col='t', row='n', **kwargs):
-        """Returns a montage of a crop array for easier visualization.
+        """Returns a montage of a crop array for easier visualization *and* robust manual
+tile-annotation in napari.
+
+Key guarantees (for downstream click-to-label tools)
+----------------------------------------------------
+This function always produces:
+  - integer tile axes:   montage_row, montage_col
+  - pixel axes:          y, x
+  - stacked pixel dims:  r=(montage_row, y), c=(montage_col, x)
+
+It also preserves the identity of each tile:
+  - If row != col:
+        tile_row_id[montage_row] = original coordinate values for `row`
+        tile_col_id[montage_col] = original coordinate values for `col`
+  - If row == col (square packing):
+        tile_id[montage_row, montage_col] = original coordinate value for that tile
+        (padded tiles get a fill value; see `pad_value`)
+
+Notes
+-----
+- This is designed so you can click a tile in napari and map it back to the
+  underlying `row` / `col` identity, even for square montages where identity
+  used to be dropped.
+- Backward-compat: callers may pass col/row via kwargs.
 
 Parameters
 ----------
 ds : xr.Dataset
     A crop array dataset.
 col : str, optional
-    Coordinate to arrange in columns, typically 'fov', 'n', or 't' (default 't').
+    Coordinate/dimension to arrange in columns.
 row : str, optional
-    Coordinate to arrange in rows, typically 'fov', 'n' (default 'n'), or 't'.
+    Coordinate/dimension to arrange in rows.
+pad_value : scalar, optional (kwarg only)
+    Value used to fill padded tiles (default: 0).
 
 Returns
 -------
 xr.Dataset
-    A reshaped crop array in which individual crops are arranged in a 2D array
-    of dimensions row x col. If row and col are the same, a square montage is returned."""
+    A reshaped dataset arranged in a montage."""
         return _impl_CropArrayPlot_montage(self.ds, col=col, row=row, **kwargs)
 
 
@@ -264,22 +288,52 @@ CropArrayDF.variables_to_df.__wrapped__ = _impl_CropArrayDF_variables_to_df
 CropArrayDF.variables_to_df.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayDF_variables_to_df).parameters.values())[1:])
 
 
-from croparray.napari_view import view_montage as _impl_CropArrayView_view_montage
+from croparray.napari_view import montage_viewer as _impl_CropArrayView_montage_viewer
 
 @dataclass
 class CropArrayView(_BaseAccessor):
     """Generated accessor methods."""
-    def view_montage(self):
-        """Display a montage of images in Napari based on the number of channels.
+    def montage_viewer(self, row, col, show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, image_contrast=None, tile_overlay_contrast=None, tile_overlay_opacity=0.35, default_blending='additive', colormaps=None):
+        """Create a napari viewer for a montage with smart defaults:
+  - mask-like layers => add_labels
+  - image-like layers (has r,c) => add_image with robust contrast
+  - non-xy layers (e.g., (track_id,t) or (n,t)) => drawn as per-tile overlays
 
-Parameters:
-my_ca_montage (xarray.DataArray or xarray.Dataset): The input dataset with channel information."""
-        return _impl_CropArrayView_view_montage(self.ds)
+Parameters
+----------
+ca_or_ta : xr.Dataset
+    The CropArray/TrackArray dataset.
+row, col : str
+    The montage tiling dims you want (e.g. row="track_id", col="track_id"; row="n", col="t").
+show : iterable[str]
+    Variable names from the montage dataset to display.
+ch : int
+    Channel to show for image-like layers that have a 'ch' dimension.
+z_index : int
+    z-slice to show if z is present.
+viewer : napari.Viewer, optional
+    If provided, add layers into this viewer; otherwise create a new one.
+image_contrast : ContrastSpec
+    Percentiles for image layers (default 2–98).
+tile_overlay_contrast : ContrastSpec
+    Percentiles for tile overlays (default 5–95).
+tile_overlay_opacity : float
+    Opacity used for tile overlays and labels.
+default_blending : str
+    Napari blending mode for image layers.
+colormaps : dict[str,str], optional
+    Colormap per layer name; falls back to 'gray' for images and 'magenta' for overlays.
+
+Returns
+-------
+viewer, layers_dict
+    layers_dict maps requested layer name -> napari layer object."""
+        return _impl_CropArrayView_montage_viewer(self.ds, row=row, col=col, show=show, ch=ch, z_index=z_index, viewer=viewer, image_contrast=image_contrast, tile_overlay_contrast=tile_overlay_contrast, tile_overlay_opacity=tile_overlay_opacity, default_blending=default_blending, colormaps=colormaps)
 
 
-CropArrayView.view_montage.__doc__ = _impl_CropArrayView_view_montage.__doc__
-CropArrayView.view_montage.__wrapped__ = _impl_CropArrayView_view_montage
-CropArrayView.view_montage.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayView_view_montage).parameters.values())[1:])
+CropArrayView.montage_viewer.__doc__ = _impl_CropArrayView_montage_viewer.__doc__
+CropArrayView.montage_viewer.__wrapped__ = _impl_CropArrayView_montage_viewer
+CropArrayView.montage_viewer.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayView_montage_viewer).parameters.values())[1:])
 
 
 @dataclass
@@ -401,26 +455,7 @@ independent of fluorescence intensity.
 
 Track existence is defined by `coord.notnull()`. By croparray convention,
 coordinates such as 'xc' are NaN at timepoints where no detection exists
-for that track.
-
-Parameters
-----------
-ta : TrackArray
-    Input TrackArray.
-coord : str, default "xc"
-    Coordinate-like data variable used to define presence (NaN = absent).
-    Typical choices: "xc", "yc", "zc".
-out_name : str, default "track_length"
-    Name of the output data variable.
-broadcast_like : str | None, default "signal"
-    Variable to broadcast the per-track length onto so that `out_name`
-    matches its dims (e.g. track_id × t × ...). If None or missing, the
-    output is broadcast to match the presence mask derived from `coord`.
-
-Returns
--------
-TrackArray
-    The same TrackArray with a new `out_name` layer added."""
+for that track."""
         return _impl_TrackArrayMeasure_track_length(self.ds, coord=coord, out_name=out_name, broadcast_like=broadcast_like)
 
 
@@ -432,9 +467,26 @@ TrackArrayMeasure.track_length.__wrapped__ = _impl_TrackArrayMeasure_track_lengt
 TrackArrayMeasure.track_length.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_track_length).parameters.values())[1:])
 
 
+from croparray.trackarray.napari_view import display_cell_and_tracks as _impl_TrackArrayView_display_cell_and_tracks
+
 @dataclass
 class TrackArrayView(_BaseAccessor):
     """Generated accessor methods."""
+    def display_cell_and_tracks(self, tracks_df):
+        """Display the maximum intensity projection of the images and the tracks in Napari.
+
+Parameters:
+img_croparray (numpy.ndarray): Array containing image data with dimensions (fov, t, z, x, y, ch).
+tracks_df (pandas.DataFrame): DataFrame containing track information.
+
+Returns:
+napari.Viewer: The viewer instance with the images and tracks added."""
+        return _impl_TrackArrayView_display_cell_and_tracks(self.ds, tracks_df)
+
+
+TrackArrayView.display_cell_and_tracks.__doc__ = _impl_TrackArrayView_display_cell_and_tracks.__doc__
+TrackArrayView.display_cell_and_tracks.__wrapped__ = _impl_TrackArrayView_display_cell_and_tracks
+TrackArrayView.display_cell_and_tracks.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayView_display_cell_and_tracks).parameters.values())[1:])
 
 
 from croparray.trackarray.dataframe import create_tracks_df as _impl_TrackArrayDF_create_tracks_df
