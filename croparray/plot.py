@@ -1,3 +1,5 @@
+
+from __future__ import annotations
 """
 Plotting utilities for croparray.
 
@@ -8,6 +10,8 @@ Conventions:
 """
 import numpy as np
 import xarray as xr
+from typing import Any, Sequence
+import pandas as pd
 
 __all__ = ["montage"]
 
@@ -180,3 +184,69 @@ def show_rgb_large(img8, *, scale=1.0, title=None):
     if title:
         plt.title(title)
     plt.show()
+
+
+# --- Seaborn figure-level wrappers (relplot/displot/catplot) -----------------
+
+def _extract_needed_cols(kwargs: dict[str, Any]) -> list[str]:
+    """
+    Pull out seaborn column references. Conservative (ok to include extras).
+    """
+    keys = ("x", "y", "hue", "row", "col", "style", "size", "units", "weights")
+    cols: list[str] = []
+    for k in keys:
+        v = kwargs.get(k, None)
+        if isinstance(v, str) and v:
+            cols.append(v)
+    # stable unique
+    return list(dict.fromkeys(cols))
+
+
+def _build_plot_df(ds, *, vars: Sequence[str] | None, query: str | None, dropna: bool, kwargs: dict[str, Any]) -> pd.DataFrame:
+    # local import keeps plot.py lightweight
+    from .dataframe import variables_to_df
+
+    if vars is None:
+        inferred = _extract_needed_cols(kwargs)
+        if not inferred:
+            raise ValueError("Could not infer vars. Provide vars=[...] or at least x=.../y=...")
+        vars = tuple(inferred)
+
+    df = variables_to_df(ds, list(vars))
+
+    if query:
+        df = df.query(query)
+
+    if dropna:
+        df = df.dropna(subset=list(vars), how="all")
+
+    return df
+
+
+def relplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    """
+    Seaborn relplot with data auto-built from ds via variables_to_df.
+
+    Supports seaborn-native facetting: row=, col=, col_wrap=, etc.
+    """
+    import seaborn as sns
+    df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
+    return sns.relplot(data=df, **kwargs)
+
+
+def displot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    """
+    Seaborn displot with data auto-built from ds via variables_to_df.
+    """
+    import seaborn as sns
+    df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
+    return sns.displot(data=df, **kwargs)
+
+
+def catplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    """
+    Seaborn catplot with data auto-built from ds via variables_to_df.
+    """
+    import seaborn as sns
+    df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
+    return sns.catplot(data=df, **kwargs)

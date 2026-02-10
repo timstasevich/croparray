@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from typing import Sequence
 
 # Re-export the generated dataset-aware accessors
 from ._accessors_generated import (
@@ -79,6 +80,34 @@ class TrackArrayNapari(_BaseAccessor):
     def manual_filter_montage(self, *args, **kwargs):
         from .napari_view import manual_filter_montage as _impl
         return _impl(self.ds, *args, **kwargs)
+
+
+# ----------------------------
+# Seaborn figure-level wrappers (delegate to croparray.plot)
+# ----------------------------
+
+def _relplot(self, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    from . import plot as _plot
+    return _plot.relplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+def _displot(self, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    from . import plot as _plot
+    return _plot.displot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+def _catplot(self, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    from . import plot as _plot
+    return _plot.catplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+# Attach to both plot accessors (CropArray + TrackArray)
+CropArrayPlot.relplot = _relplot
+CropArrayPlot.displot = _displot
+CropArrayPlot.catplot = _catplot
+
+TrackArrayPlot.relplot = _relplot
+TrackArrayPlot.displot = _displot
+TrackArrayPlot.catplot = _catplot
+
+
 
 def _install_all_accessors():
     # Local imports to avoid circular dependencies

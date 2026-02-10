@@ -72,7 +72,17 @@ def variables_to_df(ca, var_names: Sequence[str]):
         # Broadcast + transpose into canonical order
         da = da.broadcast_like(template).transpose(*target_dims)
 
-        df = da.to_dataframe(name=name).reset_index()
+#        df = da.to_dataframe(name=name).reset_index()
+        df0 = da.to_dataframe(name=name)
+
+        # If any index level names already exist as columns, drop the column copies
+        idx_names = [n for n in df0.index.names if n is not None]
+        collisions = [n for n in idx_names if n in df0.columns]
+        if collisions:
+            df0 = df0.drop(columns=collisions)
+
+        df = df0.reset_index()
+
         dfs.append(df)
 
     final_df = pd.concat(dfs, axis=1)
