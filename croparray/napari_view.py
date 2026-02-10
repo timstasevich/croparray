@@ -336,17 +336,19 @@ def montage_viewer(
 
         layers[name] = lyr
 
-
     def _add_labels_layer(name: str, da: xr.DataArray) -> None:
+        from napari.utils.colormaps import DirectLabelColormap
+        from napari.utils.colormaps.standardize_color import transform_color
+
         da = _squeeze_safe(da)
         da = _select_first_if_present(da, "z", z_index)
         da = _select_first_if_present(da, "ch", ch)
+
         # Preserve extra dims as leading sliders
         if "t" in da.dims:
             da = da.transpose(..., "t", "r", "c", missing_dims="ignore")
         else:
             da = da.transpose(..., "r", "c", missing_dims="ignore")
-
 
         lbl = (da > 0).astype(np.uint8).data
         lyr = viewer.add_labels(
@@ -354,7 +356,41 @@ def montage_viewer(
             name=name,
             opacity=tile_overlay_opacity,
         )
+
+        # ---- Force label colors (avoid napari's default brown) ----
+        on_color = colormaps.get(name, "magenta")  # e.g. colormaps["ch0_mask"] = "magenta"
+        try:
+            rgba = tuple(float(x) for x in transform_color([on_color])[0])  # (4,)
+        except Exception:
+            rgba = on_color  # some napari versions accept strings directly
+
+        lyr.colormap = DirectLabelColormap(
+            color_dict={
+                0: (0.0, 0.0, 0.0, 0.0),  # transparent background
+                1: rgba,                  # label=1 color
+            }
+        )
+
         layers[name] = lyr
+
+    # def _add_labels_layer(name: str, da: xr.DataArray) -> None:
+    #     da = _squeeze_safe(da)
+    #     da = _select_first_if_present(da, "z", z_index)
+    #     da = _select_first_if_present(da, "ch", ch)
+    #     # Preserve extra dims as leading sliders
+    #     if "t" in da.dims:
+    #         da = da.transpose(..., "t", "r", "c", missing_dims="ignore")
+    #     else:
+    #         da = da.transpose(..., "r", "c", missing_dims="ignore")
+
+
+    #     lbl = (da > 0).astype(np.uint8).data
+    #     lyr = viewer.add_labels(
+    #         lbl,
+    #         name=name,
+    #         opacity=tile_overlay_opacity,
+    #     )
+    #     layers[name] = lyr
 
     def _add_tile_overlay(name: str, da: xr.DataArray) -> None:
         """
@@ -584,6 +620,45 @@ def _indexer_for_coord(da: xr.DataArray, dim: str, value) -> int:
             raise KeyError(f"Value {value!r} not found in coordinate {dim!r}.")
         return int(hit[0])
 
+def _tile_axis_1d_ids(
+    m: xr.Dataset,
+    *,
+    coord_name: str,
+    tile_dim: str,
+    pixel_dim: str,
+    step: int,
+) -> np.ndarray:
+    """
+    Return 1D tile IDs for a montage axis.
+
+    Prefer tile_dim (e.g., 'montage_row'/'montage_col'). If the coord is instead
+    broadcast onto pixel_dim (e.g., 'r'/'c'), downsample by taking every `step`
+    element (one per tile).
+    """
+    da = m.coords.get(coord_name, None)
+    if da is None:
+        raise ValueError(f"Rectangular montage expected coord {coord_name!r}.")
+
+    # If it's already on montage tile dims, perfect.
+    if tile_dim in da.dims:
+        return np.asarray(da.values)
+
+    # If it is broadcast on pixel dim only, downsample.
+    if pixel_dim in da.dims:
+        # If it's 2D (e.g. dims ('r','c')), reduce to 1D along the other axis.
+        if da.ndim == 2:
+            other = [d for d in da.dims if d != pixel_dim]
+            if len(other) != 1:
+                raise ValueError(f"Unexpected dims for {coord_name!r}: {da.dims}")
+            da_1d = da.isel({other[0]: 0})
+        else:
+            da_1d = da
+
+        vals = np.asarray(da_1d.values)
+        return vals[::step]
+
+    raise ValueError(f"Coord {coord_name!r} has unexpected dims {da.dims}.")
+
 def _overlay_pixels_from_filter_table(
     *,
     m: xr.Dataset,
@@ -597,11 +672,14 @@ def _overlay_pixels_from_filter_table(
     """
     Build a pixel-space overlay DataArray aligned to montage (r,c) and optionally t.
     Returned dims match the montage reference convention:
-      - square montages typically have dims including 't','r','c'
-      - row=tile_dim col='t' typically has dims including 'r','c' (no 't' dim)
+      - square montages: dims ('t','r','c')
+      - row=tile_dim col='t' rectangular: dims ('r','c') (no 't' dim)
     """
     square = (row == col)
 
+    # ----------------------------
+    # Square case (UNCHANGED)
+    # ----------------------------
     if square:
         tile_id_2d = m.coords["tile_id"]  # (montage_row, montage_col)
         ids = np.asarray(tile_id_2d.values)
@@ -610,7 +688,6 @@ def _overlay_pixels_from_filter_table(
         # Compute per-tile pixel size from total montage size
         tile_h = int(m.sizes["r"] // max(Mrow, 1))
         tile_w = int(m.sizes["c"] // max(Mcol, 1))
-
 
         ft = filter_table.transpose(tile_dim, "t")  # (tile_dim, t)
 
@@ -634,16 +711,9 @@ def _overlay_pixels_from_filter_table(
                     continue  # leave zeros for padded/unknown tiles
                 tv[:, mr, mc] = ft_data[i, :]
 
-
-        # print("DEBUG m.sizes r,c:", m.sizes["r"], m.sizes["c"])
-        # print("DEBUG Mrow,Mcol:", Mrow, Mcol)
-        # print("DEBUG tile_h,tile_w:", tile_h, tile_w)
-        # print("DEBUG tv shape:", tv.shape)   # should be (T, Mrow, Mcol)
         pix = _tile_values_to_pixel_image(tv, tile_h, tile_w)  # (t, R, C)
-        # print("DEBUG pix shape:", pix.shape)  # should be (T, m.sizes["r"], m.sizes["c"])
         assert pix.shape[1] == m.sizes["r"], (pix.shape, m.sizes["r"], tile_h, Mrow)
         assert pix.shape[2] == m.sizes["c"], (pix.shape, m.sizes["c"], tile_w, Mcol)
-
 
         out = xr.DataArray(
             pix.astype(np.uint8),
@@ -653,19 +723,34 @@ def _overlay_pixels_from_filter_table(
         )
         return out
 
-
-
-    # Rectangular montage: expect tile_row_id (montage_row) and tile_col_id (montage_col)
-    tile_row_id = m.coords.get("tile_row_id", None)
-    tile_col_id = m.coords.get("tile_col_id", None)
-    if tile_row_id is None or tile_col_id is None:
-        raise ValueError("Rectangular montage expected coords 'tile_row_id' and 'tile_col_id'.")
+    # ----------------------------
+    # Rectangular case (FIXED)
+    # ----------------------------
+    # Always extract tile-level IDs even if coords are broadcast onto pixels.
+    tile_row_id = _tile_axis_1d_ids(
+        m,
+        coord_name="tile_row_id",
+        tile_dim="montage_row",
+        pixel_dim="r",
+        step=tile_h,
+    )
+    tile_col_id = _tile_axis_1d_ids(
+        m,
+        coord_name="tile_col_id",
+        tile_dim="montage_col",
+        pixel_dim="c",
+        step=tile_w,
+    )
 
     if col == "t":
         # Map each (montage_row, montage_col) -> (tile_dim, t) from row_id and col_id
-        row_sel = filter_table.sel({tile_dim: tile_row_id})  # dims (montage_row, t)
-        grid = row_sel.sel(t=tile_col_id)  # dims (montage_row, montage_col)
-        pix = _tile_values_to_pixel_image(np.asarray(grid.data), tile_h, tile_w)  # (R, C)
+        # This must be TILE-LEVEL (montage_row/montage_col), not pixel-level.
+        row_sel = filter_table.sel({tile_dim: tile_row_id})   # -> (montage_row, t)
+        grid = row_sel.sel(t=tile_col_id)                     # -> (montage_row, montage_col)
+
+        pix = _tile_values_to_pixel_image(np.asarray(grid.data), tile_h, tile_w)  # -> (R, C)
+        assert pix.shape[0] == m.sizes["r"], (pix.shape, m.sizes["r"], tile_h, len(tile_row_id))
+        assert pix.shape[1] == m.sizes["c"], (pix.shape, m.sizes["c"], tile_w, len(tile_col_id))
 
         out = xr.DataArray(
             pix.astype(np.uint8),
@@ -675,10 +760,10 @@ def _overlay_pixels_from_filter_table(
         )
         return out
 
-    # Other rectangular layouts: not requested right now.
     raise NotImplementedError(
         "manual_filter_montage currently supports rectangular montages only when col == 't'."
     )
+
 
 def _broadcast_overlay_like_ref(overlay: xr.DataArray, ref: xr.DataArray) -> np.ndarray:
     """
@@ -712,6 +797,25 @@ def _broadcast_overlay_like_ref(overlay: xr.DataArray, ref: xr.DataArray) -> np.
 
     return data.astype(np.uint8)
 
+def _tile_axis_1d_ids(m: xr.Dataset, *, coord_name: str, tile_dim: str, pixel_dim: str, step: int) -> np.ndarray:
+    da = m.coords.get(coord_name, None)
+    if da is None:
+        raise ValueError(f"Expected coord {coord_name!r} on montage.")
+
+    if tile_dim in da.dims:
+        return np.asarray(da.values)
+
+    if pixel_dim in da.dims:
+        # if 2D, pick a representative line to get 1D along pixel_dim
+        if da.ndim == 2:
+            other = [d for d in da.dims if d != pixel_dim]
+            da = da.isel({other[0]: 0})
+        vals = np.asarray(da.values)
+        return vals[::step]
+
+    raise ValueError(f"Coord {coord_name!r} has unexpected dims {da.dims}.")
+
+
 def manual_filter_montage(
     ds: xr.Dataset,
     *,
@@ -725,6 +829,8 @@ def manual_filter_montage(
     write_back: bool = True,
     overlay_opacity: float = 0.35,
     single_click_delay_ms: int = 100,
+    colormaps: dict[str, Any] | None = None,          # NEW
+    label_colors: dict[int, Any] | None = None,       # NEW (optional override)
 ) -> tuple[napari.Viewer, dict[str, Any], xr.DataArray]:
     """
     Interactive manual labeling of montage tiles into a binary filter table of shape (tile_dim, t).
@@ -801,6 +907,7 @@ def manual_filter_montage(
         ch=ch,
         z_index=z_index,
         viewer=viewer,
+        colormaps=colormaps,     # NEW
     )
 
     # Rebuild montage locally (montage_viewer doesn't return it)
@@ -938,35 +1045,71 @@ def manual_filter_montage(
     # Build initial overlay from the staged table across ALL contexts
     overlay_np = _overlay_np_for_all_contexts()
 
-
+    from napari.utils.colormaps import DirectLabelColormap
     lbl_layer = viewer.add_labels(
         overlay_np.astype(np.uint8),
         name=filter_name,
         opacity=overlay_opacity,
     )
+
+    # ---- Label colors (avoid napari's default brown) ----
+    def _as_rgba(c):
+        # Accept either a string or an RGB/RGBA tuple
+        if isinstance(c, str):
+            return c
+        arr = np.asarray(c, dtype=float)
+        if arr.ndim == 1 and arr.size == 3:
+            arr = np.concatenate([arr, [1.0]])
+        return tuple(arr.tolist())
+
+    # Determine "on" color
+    on_color = None
+
+    if label_colors is not None and 1 in label_colors:
+        on_color = label_colors[1]
+    elif colormaps is not None:
+        if filter_name in colormaps:
+            on_color = colormaps[filter_name]
+        else:
+            for nm in show:
+                if nm in colormaps:
+                    on_color = colormaps[nm]
+                    break
+
+    if on_color is None:
+        on_color = (1.0, 1.0, 0.0, 1.0)  # default yellow
+
+    lbl_layer.colormap = DirectLabelColormap(
+        color_dict={
+            None: (0.0, 0.0, 0.0, 0.0),
+            0: (0.0, 0.0, 0.0, 0.0),   # background transparent
+            1: _as_rgba(on_color),     # active label
+        }
+    )
+
     # ------------------------------------------------------------
     # Debug overlay: shows mapping info when clicking a tile
     # ------------------------------------------------------------
-    # click_info = viewer.add_points(
-    #     np.zeros((0, overlay_np.ndim), dtype=float),
-    #     name="click_info",
-    #     size=0.0,  # hide point marker, show text only
-    # )
-    # # Hide point glyphs; text only
-    # if hasattr(click_info, "face_color"):
-    #     click_info.face_color = "transparent"
-    # if hasattr(click_info, "edge_color"):
-    #     click_info.edge_color = "transparent"
+    click_info = viewer.add_points(
+        np.zeros((0, overlay_np.ndim), dtype=float),
+        name="click_info",
+        size=0.0,  # hide point marker, show text only
+    )
+    # Hide point glyphs; text only
+    if hasattr(click_info, "face_color"):
+        click_info.face_color = "transparent"
+    if hasattr(click_info, "edge_color"):
+        click_info.edge_color = "transparent"
 
 
-    # # Configure text rendering
-    # click_info.text = {
-    #     "string": "{label}",
-    #     "size": 12,
-    #     "anchor": "center",
-    # }
+    # Configure text rendering
+    click_info.text = {
+        "string": "{label}",
+        "size": 12,
+        "anchor": "center",
+    }
 
-    # layers["click_info"] = click_info
+    layers["click_info"] = click_info
 
     # Make label=1 visible
     try:
@@ -987,6 +1130,10 @@ def manual_filter_montage(
     square = (row == col)
     tile_row_id = m.coords.get("tile_row_id", None)
     tile_col_id = m.coords.get("tile_col_id", None)
+    # Tile-level identity vectors (robust even if coords are pixel-broadcast)
+    tile_row_id_1d = _tile_axis_1d_ids(m, coord_name="tile_row_id", tile_dim="montage_row", pixel_dim="r", step=tile_h) if tile_row_id is not None else None
+    tile_col_id_1d = _tile_axis_1d_ids(m, coord_name="tile_col_id", tile_dim="montage_col", pixel_dim="c", step=tile_w) if tile_col_id is not None else None
+
 
     ref_dims = list(ref.dims)
     r_axis = ref_dims.index("r")
@@ -1098,7 +1245,13 @@ def manual_filter_montage(
         # Clamp time
         T = int(filter_table.sizes["t"])
         t_idx_for_table = int(np.clip(int(t_idx_for_table), 0, max(0, T - 1)))
-        t_idx_for_pixels = int(np.clip(int(t_idx_for_pixels), 0, max(0, T - 1)))
+
+        # Only clamp pixels-time if the displayed labels layer actually has a t axis
+        if t_axis is not None:
+            t_idx_for_pixels = int(np.clip(int(t_idx_for_pixels), 0, max(0, T - 1)))
+        else:
+            t_idx_for_pixels = None
+
 
         ctx = _current_context_isel()  # {exp: i, cell: j, ...}
 
@@ -1293,7 +1446,7 @@ def manual_filter_montage(
             return
 
         # Cancel pending single-click if this is the 2nd click (double-click => do nothing)
-        if QTimer is not None and click_state["pending"]:
+        if QTimer is not None and click_state.get("pending", False):
             try:
                 click_state["timer"].stop()
             except Exception:
@@ -1309,36 +1462,45 @@ def manual_filter_montage(
         ry = int(np.clip(int(round(data_pos[r_axis])), 0, m.sizes["r"] - 1))
         cx = int(np.clip(int(round(data_pos[c_axis])), 0, m.sizes["c"] - 1))
 
+        # Tile indices in montage grid
         mr = int(np.clip(ry // tile_h, 0, max(0, Mrow - 1)))
         mc = int(np.clip(cx // tile_w, 0, max(0, Mcol - 1)))
-
-        # --- identity from montage coordinate mappings ---
-        row_val = tile_row_id.values[mr] if tile_row_id is not None else mr
-        col_val = tile_col_id.values[mc] if tile_col_id is not None else mc
 
         mods = set(getattr(event, "modifiers", ()) or ())
         shift_down = ("Shift" in mods)
 
-        # --- current time index in the displayed montage/ref ---
-        # Use the computed t_axis (ref dims order), not "axis 0".
-        if t_axis is not None:
-            t_idx = int(viewer.dims.current_step[t_axis])
-        else:
-            t_idx = 0
+        # ---- Identity from montage coordinate mappings (tile-level, not pixel-broadcast) ----
+        row_val = tile_row_id_1d[mr] if tile_row_id_1d is not None else mr
+        col_val = tile_col_id_1d[mc] if tile_col_id_1d is not None else mc
 
-        # Clamp to valid range for safety
         T = int(filter_table.sizes["t"])
-        t_idx = int(np.clip(t_idx, 0, max(0, T - 1)))
 
-        # These are what your debug overlay expects:
-        # - t_val is what you display as "f"
-        # - t_idx_for_pixels is what you use to index the labels layer plane
-        t_val = t_idx
-        t_idx_for_pixels = t_idx
-
-        # Determine tile identity and debug label
+        # ---- Determine which time index we are editing ----
         if square:
-            # grid_rc is purely for display/debug
+            # Square: use napari t slider if present
+            if t_axis is not None:
+                t_idx_for_table = int(viewer.dims.current_step[t_axis])
+            else:
+                t_idx_for_table = 0
+            t_idx_for_table = int(np.clip(t_idx_for_table, 0, max(0, T - 1)))
+
+            # Square labels layer has a t axis, so we also paint only that plane
+            t_idx_for_pixels = t_idx_for_table
+            t_val_for_debug = t_idx_for_table
+
+        else:
+            # Rectangular row=track_id, col=t: time is encoded in montage columns.
+            # col_val is the *t coordinate value* for that montage column.
+            t_val_for_debug = col_val
+            t_idx_for_table = int(t_index.get(t_val_for_debug, 0))
+            t_idx_for_table = int(np.clip(t_idx_for_table, 0, max(0, T - 1)))
+
+            # Rectangular labels layer is 2D (r,c), no t axis to index
+            t_idx_for_pixels = None
+
+        # ---- Determine tile identity and debug label ----
+        if square:
+            # grid_rc purely for display/debug
             debug_tile_label = f"{mr},{mc}"
 
             # True track id from the original ds (NOT the grid coords)
@@ -1353,25 +1515,24 @@ def manual_filter_montage(
             tile_val = track_id_orig
 
         else:
+            # Rectangular: row_val is the track_id value for that montage row
             tile_val = int(row_val)
             debug_tile_label = str(tile_val)
             track_id_orig = None
 
-
-
-        # # Update debug overlay (text only)
-        # _update_click_info(
-        #     mr=mr,
-        #     mc=mc,
-        #     tile_val=tile_val,
-        #     t_val=t_idx,                 # use the slider index as f
-        #     t_idx_for_pixels=t_idx,
-        #     display_tile_label=debug_tile_label,
-        #     track_id_orig=track_id_orig,
-        # )
+        # Optional: update debug overlay (if you have it wired up)
+        _update_click_info(
+            mr=mr,
+            mc=mc,
+            tile_val=tile_val,
+            t_val=t_val_for_debug,              # shows true t coord in rectangular mode
+            t_idx_for_pixels=t_idx_for_pixels,  # None in rectangular mode
+            display_tile_label=debug_tile_label,
+            track_id_orig=track_id_orig,
+        )
 
         # payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table)
-        payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx)
+        payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table)
 
         # Fire immediately if no Qt timer available; otherwise delay to avoid double-click conflicts
         if QTimer is None:
@@ -1386,10 +1547,10 @@ def manual_filter_montage(
         click_state["timer"] = timer
 
         def _fire():
-            if not click_state["pending"]:
+            if not click_state.get("pending", False):
                 return
             click_state["pending"] = False
-            pl = click_state["payload"]
+            pl = click_state.get("payload", None)
             click_state["payload"] = None
             if pl is not None:
                 _apply_toggle_or_row(pl)
@@ -1399,6 +1560,7 @@ def manual_filter_montage(
         timer.start(int(single_click_delay_ms))
 
         yield
+
 
     
 

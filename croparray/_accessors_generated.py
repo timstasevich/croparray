@@ -331,13 +331,13 @@ viewer, layers_dict
     layers_dict maps requested layer name -> napari layer object."""
         return _impl_CropArrayView_montage_viewer(self.ds, row=row, col=col, show=show, ch=ch, z_index=z_index, viewer=viewer, image_contrast=image_contrast, tile_overlay_contrast=tile_overlay_contrast, tile_overlay_opacity=tile_overlay_opacity, default_blending=default_blending, colormaps=colormaps)
 
-    def manual_filter_montage(self, row, col, filter_name='manual_filter', show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, write_back=True, overlay_opacity=0.35, single_click_delay_ms=100):
+    def manual_filter_montage(self, row, col, filter_name='manual_filter', show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, write_back=True, overlay_opacity=0.35, single_click_delay_ms=100, colormaps=None, label_colors=None):
         """Interactive manual labeling of montage tiles into a binary filter table of shape (tile_dim, t).
 
 Minimal interactions (no paint mode):
   - click: toggle tile (0 <-> 1)   [single-click is delayed to avoid double-click conflicts]
   - Shift+click: toggle entire montage_row"""
-        return _impl_CropArrayView_manual_filter_montage(self.ds, row=row, col=col, filter_name=filter_name, show=show, ch=ch, z_index=z_index, viewer=viewer, write_back=write_back, overlay_opacity=overlay_opacity, single_click_delay_ms=single_click_delay_ms)
+        return _impl_CropArrayView_manual_filter_montage(self.ds, row=row, col=col, filter_name=filter_name, show=show, ch=ch, z_index=z_index, viewer=viewer, write_back=write_back, overlay_opacity=overlay_opacity, single_click_delay_ms=single_click_delay_ms, colormaps=colormaps, label_colors=label_colors)
 
 
 CropArrayView.montage_viewer.__doc__ = _impl_CropArrayView_montage_viewer.__doc__
