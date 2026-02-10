@@ -265,21 +265,24 @@ from croparray.dataframe import variables_to_df as _impl_CropArrayDF_variables_t
 class CropArrayDF(_BaseAccessor):
     """Generated accessor methods."""
     def variables_to_df(self, var_names):
-        """Creates a pandas DataFrame from selected variables of a CropArray.
+        """Creates a pandas DataFrame from selected variables/coords of a CropArray.
+
+Unlike xr.Dataset.to_dataframe(), this lets you select specific variables
+and will broadcast lower-dimensional variables to a common target grid
+when possible (e.g. per-track scalars to (track_id, t)).
 
 Parameters
 ----------
 ca : xarray.Dataset
     The CropArray dataset.
 var_names : Sequence[str]
-    Names of variables in the dataset to include as columns.
+    Names of variables/coords in the dataset to include as columns.
 
 Returns
 -------
 pandas.DataFrame
-    A concatenated DataFrame containing the requested variables, with any
-    MultiIndex flattened (similar to ``xr.Dataset.to_dataframe()`` but with a
-    flattened index)."""
+    DataFrame containing requested columns, with shared index columns
+    (dims/coords) included once."""
         return _impl_CropArrayDF_variables_to_df(self.ds, var_names)
 
 
