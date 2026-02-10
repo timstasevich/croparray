@@ -294,7 +294,7 @@ from croparray.napari_view import manual_filter_montage as _impl_CropArrayView_m
 @dataclass
 class CropArrayView(_BaseAccessor):
     """Generated accessor methods."""
-    def montage_viewer(self, row, col, show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, image_contrast=None, tile_overlay_contrast=None, tile_overlay_opacity=0.35, default_blending='additive', colormaps=None):
+    def montage_viewer(self, row, col, show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, image_contrast=None, tile_overlay_contrast=None, tile_overlay_opacity=0.35, default_blending='additive', colormaps=None, show_tile_text=True, tile_text_name='tile_text', tile_text_size=14, tile_text_color='white'):
         """Create a napari viewer for a montage with smart defaults:
   - mask-like layers => add_labels
   - image-like layers (has r,c) => add_image with robust contrast
@@ -329,7 +329,7 @@ Returns
 -------
 viewer, layers_dict
     layers_dict maps requested layer name -> napari layer object."""
-        return _impl_CropArrayView_montage_viewer(self.ds, row=row, col=col, show=show, ch=ch, z_index=z_index, viewer=viewer, image_contrast=image_contrast, tile_overlay_contrast=tile_overlay_contrast, tile_overlay_opacity=tile_overlay_opacity, default_blending=default_blending, colormaps=colormaps)
+        return _impl_CropArrayView_montage_viewer(self.ds, row=row, col=col, show=show, ch=ch, z_index=z_index, viewer=viewer, image_contrast=image_contrast, tile_overlay_contrast=tile_overlay_contrast, tile_overlay_opacity=tile_overlay_opacity, default_blending=default_blending, colormaps=colormaps, show_tile_text=show_tile_text, tile_text_name=tile_text_name, tile_text_size=tile_text_size, tile_text_color=tile_text_color)
 
     def manual_filter_montage(self, row, col, filter_name='manual_filter', show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, write_back=True, overlay_opacity=0.35, single_click_delay_ms=100, colormaps=None, label_colors=None):
         """Interactive manual labeling of montage tiles into a binary filter table of shape (tile_dim, t).

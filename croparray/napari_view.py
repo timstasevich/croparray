@@ -187,6 +187,10 @@ def montage_viewer(
     tile_overlay_opacity: float = 0.35,
     default_blending: str = "additive",
     colormaps: dict[str, str] | None = None,
+    show_tile_text: bool = True,
+    tile_text_name: str = "tile_text",
+    tile_text_size: int = 14,
+    tile_text_color: str | tuple = "white",
 ) -> tuple[napari.Viewer, dict[str, Any]]:
     """
     Create a napari viewer for a montage with smart defaults:
@@ -286,6 +290,146 @@ def montage_viewer(
     else:
         tile_row_id_1d = m.coords.get("tile_row_id", None)
         tile_col_id_1d = m.coords.get("tile_col_id", None)
+
+    # ---------------------------------------------------------------------
+    # Tile text overlay (track_id,t) or (track_id) centered per tile
+    # ---------------------------------------------------------------------
+    def _add_tile_text_layer():
+        # Determine montage grid size (MR x MC)
+        Mrow = int(m.sizes.get("montage_row", 0) or 0)
+        Mcol = int(m.sizes.get("montage_col", 0) or 0)
+        if Mrow == 0 and "montage_row" in m.coords:
+            Mrow = int(len(np.unique(np.asarray(m.coords["montage_row"].values))))
+        if Mcol == 0 and "montage_col" in m.coords:
+            Mcol = int(len(np.unique(np.asarray(m.coords["montage_col"].values))))
+
+        # Robustly get tile-level row/col IDs even if coords are pixel-broadcast
+        row_ids = None
+        col_ids = None
+        if not square:
+            row_ids = _tile_axis_1d_ids(
+                m, coord_name="tile_row_id",
+                tile_dim="montage_row", pixel_dim="r", step=tile_h
+            )
+            col_ids = _tile_axis_1d_ids(
+                m, coord_name="tile_col_id",
+                tile_dim="montage_col", pixel_dim="c", step=tile_w
+            )
+
+        # Build label grid (MR x MC) as strings
+        labels_2d = np.empty((Mrow, Mcol), dtype=object)
+
+        if square and row == col == "track_id" and ("track_id" in ca_or_ta.dims):
+            # Square-packed track_id x track_id
+            n_tiles = int(ca_or_ta.sizes["track_id"])
+            S = int(np.ceil(np.sqrt(n_tiles)))
+            track_vals = np.asarray(ca_or_ta.coords["track_id"].values)
+
+            for mr in range(Mrow):
+                for mc in range(Mcol):
+                    k = mr * S + mc
+                    if 0 <= k < n_tiles:
+                        v = track_vals[k]
+                        try:
+                            v = v.item()
+                        except Exception:
+                            pass
+                        labels_2d[mr, mc] = f"{v}"
+                    else:
+                        labels_2d[mr, mc] = ""
+
+        elif square:
+            # Generic square
+            ids = np.asarray(tile_id_2d.values)
+            for mr in range(Mrow):
+                for mc in range(Mcol):
+                    v = ids[mr, mc]
+                    try:
+                        v = v.item()
+                    except Exception:
+                        pass
+                    labels_2d[mr, mc] = f"{v}"
+
+        else:
+            # Rectangular: row=track_id, col=t
+            for mr in range(Mrow):
+                rid = row_ids[mr]
+                try:
+                    rid = int(rid)
+                except Exception:
+                    pass
+                for mc in range(Mcol):
+                    cid = col_ids[mc]
+                    if col == "t":
+                        try:
+                            tv = int(cid)
+                        except Exception:
+                            tv = cid
+                        labels_2d[mr, mc] = f"{rid},{tv}"
+                    else:
+                        labels_2d[mr, mc] = f"{rid}"
+
+        # Create a Points layer with text
+        ref_dims = list(ref.dims)
+        r_axis = ref_dims.index("r")
+        c_axis = ref_dims.index("c")
+        t_axis = ref_dims.index("t") if "t" in ref_dims else None
+        extra_dims = [d for d in ref_dims if d not in ("t", "r", "c")]
+
+        from itertools import product
+        extra_ranges = [range(int(ref.sizes[d])) for d in extra_dims]
+        t_range = range(int(ref.sizes["t"])) if ("t" in ref.dims) else range(1)
+
+        pts = []
+        txt = []
+
+        for extra_idx in product(*extra_ranges) if extra_dims else [()]:
+            for tt in t_range:
+                for mr in range(Mrow):
+                    y = mr * tile_h + tile_h / 2
+                    for mc in range(Mcol):
+                        lab = labels_2d[mr, mc]
+                        if not lab:
+                            continue
+                        x = mc * tile_w + tile_w / 2
+
+                        coord = np.zeros(len(ref_dims), dtype=float)
+                        for j, d in enumerate(extra_dims):
+                            coord[ref_dims.index(d)] = float(extra_idx[j])
+                        if t_axis is not None:
+                            coord[t_axis] = float(tt)
+                        coord[r_axis] = float(y)
+                        coord[c_axis] = float(x)
+
+                        pts.append(coord)
+                        txt.append(lab)
+
+        pts = np.asarray(pts, dtype=float) if pts else np.zeros((0, len(ref_dims)))
+
+        text_layer = viewer.add_points(
+            pts,
+            name=tile_text_name,
+            size=0.0,
+        )
+        try:
+            text_layer.face_color = "transparent"
+            text_layer.edge_color = "transparent"
+        except Exception:
+            pass
+
+        text_layer.text = {
+            "string": "{label}",
+            "size": tile_text_size,
+            "anchor": "center",
+            "color": tile_text_color,
+        }
+        text_layer.features = {"label": np.asarray(txt, dtype=object)}
+        layers[tile_text_name] = text_layer
+
+    if show_tile_text:
+        _add_tile_text_layer()
+
+
 
     def _add_image_layer(name: str, da: xr.DataArray) -> None:
         da = _squeeze_safe(da)
