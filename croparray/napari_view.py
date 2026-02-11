@@ -16,6 +16,64 @@ __all__ = ["montage_viewer","manual_filter_montage"]
 #     lo_pct: float = 2.0
 #     hi_pct: float = 98.0
 
+def _manual_filter_sidecar_path(
+    ds: xr.Dataset,
+    *,
+    filter_name: str,
+    output_dir: str | None = None,
+) -> str:
+    """
+    Compute path for one-file-per-filter sidecar NetCDF.
+
+    Example:
+      source: /path/mydata.nc
+      filter: stretchy
+      -> /path/mydata__manual__stretchy.nc
+    """
+    src = ds.encoding.get("source", None)
+
+    if isinstance(src, str):
+        base = os.path.basename(src)
+        stem = base[:-3] if base.endswith(".nc") else base
+        default_dir = os.path.dirname(src)
+    else:
+        # in-memory dataset
+        stem = "dataset"
+        default_dir = os.getcwd()
+
+    out_dir = output_dir if output_dir is not None else default_dir
+    filename = f"{stem}__manual__{filter_name}.nc"
+    return os.path.join(out_dir, filename)
+
+def save_manual_filter_sidecar(
+    ds: xr.Dataset,
+    *,
+    filter_name: str,
+    output_dir: str | None = None,
+) -> str:
+    """
+    Save only ds[filter_name] + its coords into a per-filter sidecar NetCDF.
+    Returns the path written.
+    """
+    if filter_name not in ds:
+        raise ValueError(f"'{filter_name}' not found in dataset.")
+
+    path = _manual_filter_sidecar_path(ds, filter_name=filter_name, output_dir=output_dir)
+
+    da = ds[filter_name]
+
+    # Save as a tiny dataset with coords needed for alignment
+    out = xr.Dataset({filter_name: da})
+
+    # (Optional) store some metadata about provenance
+    src = ds.encoding.get("source", None)
+    if isinstance(src, str):
+        out.attrs["croparray_source"] = src
+    out.attrs["manual_filter_name"] = filter_name
+
+    out.to_netcdf(path, mode="w")
+    return path
+
 def _normalize_image_contrast(image_contrast):
     """
     Normalize image_contrast to (lo, hi_percentile).
@@ -1875,20 +1933,21 @@ def manual_filter_montage(
     def _on_clear():
         _clear_filter_table()
 
-    import tempfile
-    from qtpy.QtWidgets import QMessageBox
     from napari.utils.notifications import show_info, show_error
+    from qtpy.QtWidgets import QMessageBox
 
     def _on_save_file():
         try:
+            # commit staged edits into ds[filter_name]
             _write_filter_table_back()
-            path = _resolve_output_path(ds, output_dir=output_dir)
 
-            # Confirm overwrite
+            path = _manual_filter_sidecar_path(ds, filter_name=filter_name, output_dir=output_dir)
+
+            # confirm overwrite if exists
             if os.path.exists(path):
                 reply = QMessageBox.question(
                     viewer.window._qt_window,
-                    "Overwrite file?",
+                    "Overwrite manual filter?",
                     f"This will overwrite:\n\n{path}\n\nAre you sure?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,
@@ -1896,72 +1955,11 @@ def manual_filter_montage(
                 if reply != QMessageBox.Yes:
                     return
 
-            # 1) Force all data/coords into memory
-            ds.load()
-
-            # 2) Make a deep copy that is independent of any file handles
-            ds_out = ds.copy(deep=True)
-
-            # 3) Close original handle (Windows-safe)
-            try:
-                ds.close()
-            except Exception:
-                pass
-
-            # 4) Write to a temp file first, then replace atomically
-            out_dir = os.path.dirname(path) or os.getcwd()
-            fd, tmp_path = tempfile.mkstemp(prefix="._tmp_", suffix=".nc", dir=out_dir)
-            os.close(fd)
-
-            ds_out.to_netcdf(tmp_path, mode="w")
-            os.replace(tmp_path, path)
-
-            show_info(f"Saved (overwrote):\n{path}")
+            written = save_manual_filter_sidecar(ds, filter_name=filter_name, output_dir=output_dir)
+            show_info(f"Saved manual filter:\n{written}")
 
         except Exception as e:
-            show_error(f"Failed to save file:\n{e}")
-            # Clean temp file if it exists
-            try:
-                if "tmp_path" in locals() and os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-
-    # from qtpy.QtWidgets import QMessageBox
-    # from napari.utils.notifications import show_info, show_error
-
-    # def _on_save_file():
-    #     try:
-    #         _write_filter_table_back()
-
-    #         path = _resolve_output_path(ds, output_dir=output_dir)
-
-    #         # ---- Confirm overwrite ----
-    #         reply = QMessageBox.question(
-    #             viewer.window._qt_window,
-    #             "Overwrite file?",
-    #             f"This will overwrite:\n\n{path}\n\nAre you sure?",
-    #             QMessageBox.Yes | QMessageBox.No,
-    #             QMessageBox.No,
-    #         )
-
-    #         if reply != QMessageBox.Yes:
-    #             return  # user cancelled
-
-    #         # ---- Windows-safe overwrite ----
-    #         try:
-    #             ds.load()
-    #             ds.close()
-    #         except Exception:
-    #             pass
-
-    #         ds.to_netcdf(path, mode="w")
-
-    #         show_info(f"Overwrote dataset:\n{path}")
-
-    #     except Exception as e:
-    #         show_error(f"Failed to save file:\n{e}")
-
+            show_error(f"Failed to save manual filter:\n{e}")
 
 
     btn_clear.clicked.connect(_on_clear)

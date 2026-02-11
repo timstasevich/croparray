@@ -4,12 +4,83 @@ from typing import Any, Literal, overload
 import xarray as xr
 from .crop_array_object import CropArray
 
+import os
+from pathlib import Path
+
+def _manual_filter_sidecar_paths(path_nc: str) -> list[str]:
+    """
+    Return all per-filter manual sidecars for a given dataset path.
+
+    For /path/mydata.nc, matches:
+      /path/mydata__manual__*.nc
+    """
+    p = Path(path_nc)
+    if not p.exists():
+        return []
+    stem = p.stem  # "mydata" from "mydata.nc"
+    pattern = f"{stem}__manual__*.nc"
+    return sorted(str(x) for x in p.parent.glob(pattern))
+
+def _merge_manual_filter_sidecars_crop(ds: xr.Dataset, path_nc: str) -> xr.Dataset:
+    """Merge only sidecars that look like CropArray-space filters (no 'track_id' dim)."""
+    sidecars = _manual_filter_sidecar_paths(path_nc)
+    if not sidecars:
+        return ds
+
+    to_merge: list[xr.Dataset] = [ds]
+    for sc in sidecars:
+        try:
+            ds_sc = xr.open_dataset(sc)
+        except Exception:
+            continue
+
+        # Skip track-space sidecars here (prevents track_id coord/noncoord ambiguity)
+        if "track_id" in ds_sc.dims:
+            continue
+
+        if len(ds_sc.data_vars) == 0:
+            continue
+
+        to_merge.append(ds_sc)
+
+    if len(to_merge) == 1:
+        return ds
+
+    return xr.merge(to_merge, compat="override", join="outer")
+
+def _merge_manual_filter_sidecars_track(ds: xr.Dataset, path_nc: str) -> xr.Dataset:
+    """Merge only sidecars that look like TrackArray-space filters (have 'track_id' dim)."""
+    sidecars = _manual_filter_sidecar_paths(path_nc)
+    if not sidecars:
+        return ds
+
+    to_merge: list[xr.Dataset] = [ds]
+    for sc in sidecars:
+        try:
+            ds_sc = xr.open_dataset(sc)
+        except Exception:
+            continue
+
+        # Only take track-space sidecars here
+        if "track_id" not in ds_sc.dims:
+            continue
+
+        if len(ds_sc.data_vars) == 0:
+            continue
+
+        to_merge.append(ds_sc)
+
+    if len(to_merge) == 1:
+        return ds
+
+    return xr.merge(to_merge, compat="override", join="outer")
+
 @overload
 def open_croparray(path: str, *, as_object: Literal[True] = True, **kwargs: Any) -> CropArray: ...
 @overload
 def open_croparray(path: str, *, as_object: Literal[False], **kwargs: Any) -> xr.Dataset: ...
 
-def open_croparray(path: str, *, as_object: bool = True, **kwargs: Any) -> CropArray | xr.Dataset:
+def open_croparray(path: str, *, as_object: bool = True, load_manual_filters: bool = True, **kwargs: Any) -> CropArray | xr.Dataset:
     """
     Open a saved CropArray dataset and optionally wrap it as a CropArray object.
 
@@ -56,14 +127,15 @@ def open_croparray(path: str, *, as_object: bool = True, **kwargs: Any) -> CropA
         ds = open_croparray("my_croparray.nc", as_object=False)
     """
     ds = xr.open_dataset(path, **kwargs)
+    if load_manual_filters:
+        ds = _merge_manual_filter_sidecars_crop(ds, path)
+
 
     if as_object:
         # Local import avoids circular dependency
         return CropArray(ds)
 
     return ds
-
-
 
 @overload
 def open_croparray_zarr(store: str, *, as_object: Literal[True] = True, **kwargs: Any) -> CropArray: ...
@@ -178,6 +250,13 @@ def open_as_trackarray(
     from . import crop_array_tools
 
     ta = crop_array_tools.track_array(ca, as_object=as_object)
+    if kwargs.get("load_manual_filters", True):
+    # ta may be TrackArray wrapper or raw dataset depending on as_object
+        if hasattr(ta, "ds"):
+            ta.ds = _merge_manual_filter_sidecars_track(ta.ds, path)
+        else:
+            ta = _merge_manual_filter_sidecars_track(ta, path)
+
 
     # Help GC in large pipelines
     del ca
