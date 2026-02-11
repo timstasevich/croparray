@@ -6,6 +6,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 import xarray as xr
 import napari
+import os
 
 __all__ = ["montage_viewer","manual_filter_montage"]
 
@@ -671,6 +672,30 @@ def montage_viewer(
 #-------------------------------------------------------------------------
 # Manual interactive filter labeling on montage tiles
 # #-------------------------------------------------------------------------
+def _resolve_output_path(
+    ds: xr.Dataset,
+    *,
+    output_dir: str | None = None,
+    default_name: str = "manual_filter.nc",
+) -> str:
+    # Try to infer from dataset source
+    src = ds.encoding.get("source", None)
+
+    if isinstance(src, str):
+        base = os.path.basename(src)   # KEEP ORIGINAL NAME
+    else:
+        base = default_name
+
+    # Determine directory
+    if output_dir is not None:
+        out_dir = output_dir
+    elif isinstance(src, str):
+        out_dir = os.path.dirname(src)
+    else:
+        out_dir = os.getcwd()
+
+    return os.path.join(out_dir, base)
+
 
 def _default_save_path(ds: xr.Dataset, *, fallback: str | None = None) -> str | None:
     """
@@ -959,7 +984,6 @@ def _tile_axis_1d_ids(m: xr.Dataset, *, coord_name: str, tile_dim: str, pixel_di
 
     raise ValueError(f"Coord {coord_name!r} has unexpected dims {da.dims}.")
 
-
 def manual_filter_montage(
     ds: xr.Dataset,
     *,
@@ -975,14 +999,96 @@ def manual_filter_montage(
     single_click_delay_ms: int = 100,
     colormaps: dict[str, Any] | None = None,          # NEW
     label_colors: dict[int, Any] | None = None,       # NEW (optional override)
+    output_dir: str | None = None,
+    show_click_info: bool = False,
+    show_tile_text: bool = False, 
 ) -> tuple[napari.Viewer, dict[str, Any], xr.DataArray]:
     """
-    Interactive manual labeling of montage tiles into a binary filter table of shape (tile_dim, t).
+    Launch an interactive napari montage viewer for manual binary filtering
+    of tiles (e.g., track_id × t) and create/update a filter table.
 
-    Minimal interactions (no paint mode):
-      - click: toggle tile (0 <-> 1)   [single-click is delayed to avoid double-click conflicts]
-      - Shift+click: toggle entire montage_row
+    This function allows interactive selection of tiles in a montage layout.
+    Edits are staged in memory and can be committed to the dataset or written
+    to disk via UI controls.
 
+    Interaction model
+    -----------------
+    - Alt+Click:
+        Toggle a single (tile, t) entry.
+    - Shift+Click:
+        Toggle the selected tile across all timepoints (row operation).
+    - Click-drag:
+        Navigation only (pan/zoom). No edits occur without modifiers.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        CropArray or TrackArray dataset containing tile identity dimension
+        (e.g., ``track_id`` or ``n``) and time dimension ``t``.
+
+    row, col : str
+        Dimensions used to construct the montage grid (e.g.,
+        ``row="track_id", col="t"`` or square layouts).
+
+    filter_name : str, default "manual_filter"
+        Name of the binary filter variable to create or update in ``ds``.
+
+    show : Iterable[str]
+        Dataset variables to display in the montage (image or mask layers).
+
+    ch : int or sequence of int
+        Channel(s) to display for image layers.
+
+    z_index : int
+        Z-plane index if the dataset contains a ``z`` dimension.
+
+    viewer : napari.Viewer, optional
+        Existing viewer to reuse. If None, a new viewer is created.
+
+    write_back : bool, default True
+        If True, staged edits can be written into ``ds[filter_name]`` via
+        the "Save/Update" UI control.
+
+    overlay_opacity : float, default 0.35
+        Opacity of the manual filter overlay.
+
+    single_click_delay_ms : int, default 100
+        Delay used to distinguish single-click from double-click actions.
+
+    colormaps : dict, optional
+        Mapping from layer name to napari colormap.
+
+    label_colors : dict, optional
+        Mapping from label integer value (e.g., 1) to display color.
+
+    output_dir : str, optional
+        Directory to write dataset when "Save to file" is pressed.
+        If None, the original dataset location is used if available.
+
+    show_click_info : bool, default False
+        If True, display a debugging overlay showing clicked tile identity.
+
+    show_tile_text : bool, default False
+        If True, display per-tile text labels in the montage view.
+
+    Returns
+    -------
+    viewer : napari.Viewer
+        The napari viewer instance.
+
+    layers : dict[str, Any]
+        Mapping from layer names to napari layer objects.
+
+    filter_table : xr.DataArray
+        The staged binary filter table with dimensions
+        (*context_dims, tile_dim, t). Edits are applied here until committed.
+
+    Notes
+    -----
+    - The filter table is context-aware: additional dataset dimensions
+      (e.g., exp, cell, fov) are preserved and editable via napari sliders.
+    - Edits are staged in memory until "Save/Update" is pressed.
+    - "Save to file" optionally overwrites the source dataset after confirmation.
     """
     from .plot import montage  # lazy import to avoid circulars
 
@@ -1051,7 +1157,8 @@ def manual_filter_montage(
         ch=ch,
         z_index=z_index,
         viewer=viewer,
-        colormaps=colormaps,     # NEW
+        colormaps=colormaps,     
+        show_tile_text = show_tile_text,
     )
 
     # Rebuild montage locally (montage_viewer doesn't return it)
@@ -1234,26 +1341,27 @@ def manual_filter_montage(
     # ------------------------------------------------------------
     # Debug overlay: shows mapping info when clicking a tile
     # ------------------------------------------------------------
-    click_info = viewer.add_points(
-        np.zeros((0, overlay_np.ndim), dtype=float),
-        name="click_info",
-        size=0.0,  # hide point marker, show text only
-    )
-    # Hide point glyphs; text only
-    if hasattr(click_info, "face_color"):
-        click_info.face_color = "transparent"
-    if hasattr(click_info, "edge_color"):
-        click_info.edge_color = "transparent"
+    if show_click_info:
+        click_info = viewer.add_points(
+            np.zeros((0, overlay_np.ndim), dtype=float),
+            name="click_info",
+            size=0.0,  # hide point marker, show text only
+        )
+        # Hide point glyphs; text only
+        if hasattr(click_info, "face_color"):
+            click_info.face_color = "transparent"
+        if hasattr(click_info, "edge_color"):
+            click_info.edge_color = "transparent"
 
 
-    # Configure text rendering
-    click_info.text = {
-        "string": "{label}",
-        "size": 12,
-        "anchor": "center",
-    }
+        # Configure text rendering
+        click_info.text = {
+            "string": "{label}",
+            "size": 12,
+            "anchor": "center",
+        }
 
-    layers["click_info"] = click_info
+        layers["click_info"] = click_info
 
     # Make label=1 visible
     try:
@@ -1611,7 +1719,23 @@ def manual_filter_montage(
         mc = int(np.clip(cx // tile_w, 0, max(0, Mcol - 1)))
 
         mods = set(getattr(event, "modifiers", ()) or ())
+
+        # IMPORTANT: require a modifier for editing so normal click-drag is navigation
+        alt_down = ("Alt" in mods) or ("Option" in mods)   # Option shows up on some mac setups
         shift_down = ("Shift" in mods)
+
+        # Editing rules:
+        # - Shift+click = row/all-frames toggle
+        # - Alt+click   = single-tile toggle
+        # - plain click = ignore (navigation)
+        if shift_down:
+            pass  # allow row/all-frames behavior
+        elif alt_down:
+            pass  # allow single-tile behavior
+        else:
+            yield
+            return
+
 
         # ---- Identity from montage coordinate mappings (tile-level, not pixel-broadcast) ----
         row_val = tile_row_id_1d[mr] if tile_row_id_1d is not None else mr
@@ -1665,15 +1789,16 @@ def manual_filter_montage(
             track_id_orig = None
 
         # Optional: update debug overlay (if you have it wired up)
-        _update_click_info(
-            mr=mr,
-            mc=mc,
-            tile_val=tile_val,
-            t_val=t_val_for_debug,              # shows true t coord in rectangular mode
-            t_idx_for_pixels=t_idx_for_pixels,  # None in rectangular mode
-            display_tile_label=debug_tile_label,
-            track_id_orig=track_id_orig,
-        )
+        if show_click_info:
+            _update_click_info(
+                mr=mr,
+                mc=mc,
+                tile_val=tile_val,
+                t_val=t_val_for_debug,              # shows true t coord in rectangular mode
+                t_idx_for_pixels=t_idx_for_pixels,  # None in rectangular mode
+                display_tile_label=debug_tile_label,
+                track_id_orig=track_id_orig,
+            )
 
         # payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table)
         payload = (mr, mc, shift_down, t_idx_for_pixels, tile_val, t_idx_for_table)
@@ -1710,36 +1835,152 @@ def manual_filter_montage(
 
 
     from qtpy.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel
+    from napari.utils.notifications import show_info, show_error
+    from qtpy.QtCore import Qt
 
-    w = QWidget()
-    layout = QVBoxLayout(w)
+    # --- Upper-right: Help + Save/Update ---
+    w_top = QWidget()
+    layout_top = QVBoxLayout(w_top)
 
     help_lbl = QLabel(
         "Manual filter:\n"
-        "- Click: toggle crop\n"
-        "- Shift+Click: take all frames (f)\n"
+        "- Alt+Click: Select crop (toggles)\n"
+        "- Shift+Click: Select crop all times (toggles)\n"
         "- Press 'Save/Update' to write into ds\n"
         "- Press 'Clear' to reset staged edits\n"
     )
     help_lbl.setWordWrap(True)
 
     btn_save = QPushButton("Save/Update (write to ds)")
-    btn_clear = QPushButton("Clear (staged only)")
 
     def _on_save():
         _write_filter_table_back()
 
+    btn_save.clicked.connect(_on_save)
+
+    layout_top.addWidget(help_lbl)
+    layout_top.addWidget(btn_save)
+
+    dock_top = viewer.window.add_dock_widget(
+        w_top, name=f"{filter_name} help", area="right"
+    )
+
+    # --- Lower-right: Clear + Save to file ---
+    w_bottom = QWidget()
+    layout_bottom = QVBoxLayout(w_bottom)
+
+    btn_clear = QPushButton("Clear (staged only)")
+    btn_save_file = QPushButton("Save to file")
+
     def _on_clear():
         _clear_filter_table()
 
-    btn_save.clicked.connect(_on_save)
+    import tempfile
+    from qtpy.QtWidgets import QMessageBox
+    from napari.utils.notifications import show_info, show_error
+
+    def _on_save_file():
+        try:
+            _write_filter_table_back()
+            path = _resolve_output_path(ds, output_dir=output_dir)
+
+            # Confirm overwrite
+            if os.path.exists(path):
+                reply = QMessageBox.question(
+                    viewer.window._qt_window,
+                    "Overwrite file?",
+                    f"This will overwrite:\n\n{path}\n\nAre you sure?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
+            # 1) Force all data/coords into memory
+            ds.load()
+
+            # 2) Make a deep copy that is independent of any file handles
+            ds_out = ds.copy(deep=True)
+
+            # 3) Close original handle (Windows-safe)
+            try:
+                ds.close()
+            except Exception:
+                pass
+
+            # 4) Write to a temp file first, then replace atomically
+            out_dir = os.path.dirname(path) or os.getcwd()
+            fd, tmp_path = tempfile.mkstemp(prefix="._tmp_", suffix=".nc", dir=out_dir)
+            os.close(fd)
+
+            ds_out.to_netcdf(tmp_path, mode="w")
+            os.replace(tmp_path, path)
+
+            show_info(f"Saved (overwrote):\n{path}")
+
+        except Exception as e:
+            show_error(f"Failed to save file:\n{e}")
+            # Clean temp file if it exists
+            try:
+                if "tmp_path" in locals() and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+
+    # from qtpy.QtWidgets import QMessageBox
+    # from napari.utils.notifications import show_info, show_error
+
+    # def _on_save_file():
+    #     try:
+    #         _write_filter_table_back()
+
+    #         path = _resolve_output_path(ds, output_dir=output_dir)
+
+    #         # ---- Confirm overwrite ----
+    #         reply = QMessageBox.question(
+    #             viewer.window._qt_window,
+    #             "Overwrite file?",
+    #             f"This will overwrite:\n\n{path}\n\nAre you sure?",
+    #             QMessageBox.Yes | QMessageBox.No,
+    #             QMessageBox.No,
+    #         )
+
+    #         if reply != QMessageBox.Yes:
+    #             return  # user cancelled
+
+    #         # ---- Windows-safe overwrite ----
+    #         try:
+    #             ds.load()
+    #             ds.close()
+    #         except Exception:
+    #             pass
+
+    #         ds.to_netcdf(path, mode="w")
+
+    #         show_info(f"Overwrote dataset:\n{path}")
+
+    #     except Exception as e:
+    #         show_error(f"Failed to save file:\n{e}")
+
+
+
     btn_clear.clicked.connect(_on_clear)
+    btn_save_file.clicked.connect(_on_save_file)
 
-    layout.addWidget(help_lbl)
-    layout.addWidget(btn_save)
-    layout.addWidget(btn_clear)
+    layout_bottom.addWidget(btn_clear)
+    layout_bottom.addWidget(btn_save_file)
 
-    viewer.window.add_dock_widget(w, name=f"{filter_name} controls", area="right")
+    dock_bottom = viewer.window.add_dock_widget(
+        w_bottom, name=f"{filter_name} actions", area="right"
+    )
+
+    # --- Force vertical split: top above bottom ---
+    try:
+        viewer.window._qt_window.splitDockWidget(dock_top, dock_bottom, Qt.Vertical)
+    except Exception:
+        # If splitDockWidget isn't available in this napari build,
+        # it will still usually stack in insertion order.
+        pass
 
 
     return viewer, layers, filter_table
