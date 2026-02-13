@@ -89,7 +89,10 @@ def binarize_crop_manual(
     fill_holes: bool = False,
     close_px: int = 0,
     return_uint8: bool = True,
-    smooth_px: int = 1,  # 0 = off, 1 = light rounding (recommended)
+    smooth_px: int = 1,  # 0 = off, 1 = light rounding (recommended),
+    gauss_filt: float | None = None,
+    gauss_thresh: float = 0.5,
+    morph_px: int = 0
 ):
     """
     Fast single-threshold binarization with optional automatic threshold selection.
@@ -136,6 +139,8 @@ def binarize_crop_manual(
         If True, return uint8 mask (0/1). Else return bool mask.
     smooth_px : int
         Optional binary opening “rounding” size (0 disables).
+    morph_px: int = 0
+        Optional dilation (morph_px > 0) or erosion (morph_pix < 0) of final mask
 
     Returns
     -------
@@ -217,11 +222,11 @@ def binarize_crop_manual(
         out = np.zeros_like(m, dtype=bool)
         return out.astype(np.uint8) if return_uint8 else out
 
+    # out is the chosen center component: out = (lab == best_label)
     out = (lab == best_label)
 
     # Optional smoothing / rounding
     if smooth_px and int(smooth_px) > 0:
-        # (opening removes single-pixel spurs and rounds a bit)
         out = ndi.binary_opening(
             out,
             structure=np.ones((2 * int(smooth_px) + 1, 2 * int(smooth_px) + 1), dtype=bool),
@@ -229,6 +234,28 @@ def binarize_crop_manual(
 
     if fill_holes:
         out = ndi.binary_fill_holes(out)
+
+    # --- Optional final size tweak (after choosing center component) ---
+    mp = int(morph_px)  # signed: +dilate, -erode, 0 off
+    if mp != 0:
+        struct = np.ones((2 * abs(mp) + 1, 2 * abs(mp) + 1), dtype=bool)
+        if mp > 0:
+            out = ndi.binary_dilation(out, structure=struct)
+        else:
+            out = ndi.binary_erosion(out, structure=struct)
+
+        # Re-enforce "keep only the center component" after morph
+        lab2, nlab2 = ndi.label(out, structure=np.ones((3, 3), dtype=bool))
+        if nlab2 > 1:
+            H, W = out.shape
+            sy, sx = H // 2, W // 2
+            yy, xx = np.ogrid[:H, :W]
+            d2 = (yy - sy) ** 2 + (xx - sx) ** 2
+            labels2 = np.arange(1, nlab2 + 1, dtype=int)
+            min_d2_2 = ndi.minimum(d2, labels=lab2, index=labels2)
+            best2 = int(labels2[int(np.argmin(min_d2_2))])
+            out = (lab2 == best2)
+
 
     return out.astype(np.uint8) if return_uint8 else out
 

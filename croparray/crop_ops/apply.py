@@ -1,8 +1,135 @@
-from typing import Any, Callable, Dict, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Union, Iterable, List
 import xarray as xr
+import itertools
+
+
+__all__ = [
+    "apply_crop_op",          # NEW default (grouped wrapper)
+    "apply_crop_op_legacy",   # old behavior (power users)
+]
+
+def _infer_group_dims(
+    da: xr.DataArray,
+    *,
+    group_dims: Optional[Sequence[str]],
+    group_exclude_dims: Sequence[str],
+) -> List[str]:
+    """Choose which dims to slice over."""
+    if group_dims is not None:
+        return [d for d in group_dims if d in da.dims]
+    return [d for d in da.dims if d not in set(group_exclude_dims)]
 
 
 def apply_crop_op(
+    ds: xr.Dataset,
+    func: Callable,
+    source: Union[str, xr.DataArray] = "best_z",
+    *,
+    # grouping knobs
+    group_dims: Optional[Sequence[str]] = None,
+    group_exclude_dims: Sequence[str] = ("track_id", "t", "ch", "x", "y", "z"),
+    # --- same API as legacy ---
+    channels: Optional[Union[int, Sequence[int]]] = None,
+    channel_dim: str = "ch",
+    input_core_dims: Sequence[str] = ("x", "y"),
+    output_core_dims: Sequence[str] = ("x", "y"),
+    out_name: str = "ch{ch}_op",
+    func_kwargs: Optional[Dict[str, Any]] = None,
+    compute_sum_xy: bool = False,
+    sum_name: str = "{out}_sig",
+    sum_dims: Sequence[str] = ("x", "y"),
+    add_to_ds: bool = True,
+) -> Union[xr.Dataset, Dict[str, xr.DataArray]]:
+    """
+    Apply a per-crop image operation, automatically grouping over non-core dims.
+
+    Default behavior:
+      - Slices ds over all dims except group_exclude_dims (e.g. fov/exp/cell/rep)
+      - Runs the legacy vectorized implementation on each slice (drop=True)
+      - Concats slices back
+
+    This preserves the *exact* semantics of apply_crop_op_legacy within each slice,
+    which is critical for quantile/threshold based operations.
+
+    Power users: call apply_crop_op_legacy(...) directly to bypass grouping.
+    """
+    func_kwargs = {} if func_kwargs is None else dict(func_kwargs)
+
+    da = ds[source] if isinstance(source, str) else source
+    group_dims_eff = _infer_group_dims(da, group_dims=group_dims, group_exclude_dims=group_exclude_dims)
+
+    # No grouping needed -> just run legacy once
+    if not group_dims_eff:
+        out = apply_crop_op_legacy(
+            ds,
+            func,
+            source=source,
+            channels=channels,
+            channel_dim=channel_dim,
+            input_core_dims=input_core_dims,
+            output_core_dims=output_core_dims,
+            out_name=out_name,
+            func_kwargs=func_kwargs,
+            compute_sum_xy=compute_sum_xy,
+            sum_name=sum_name,
+            sum_dims=sum_dims,
+            add_to_ds=add_to_ds,
+        )
+        return out
+
+    # Build coordinate grid over group dims
+    coords_list = [list(ds.coords[d].values) for d in group_dims_eff]
+    slices: List[xr.Dataset] = []
+
+    for idx in itertools.product(*coords_list):
+        sel = dict(zip(group_dims_eff, idx))
+
+        # IMPORTANT: drop=True (default) to match legacy semantics
+        sub = ds.sel(sel)
+
+        sub2 = apply_crop_op_legacy(
+            sub,
+            func,
+            source=source,
+            channels=channels,
+            channel_dim=channel_dim,
+            input_core_dims=input_core_dims,
+            output_core_dims=output_core_dims,
+            out_name=out_name,
+            func_kwargs=func_kwargs,
+            compute_sum_xy=compute_sum_xy,
+            sum_name=sum_name,
+            sum_dims=sum_dims,
+            add_to_ds=True,  # always add inside slice
+        )
+        slices.append(sub2)
+
+    # Concat back along group dims (preserve original coord order)
+    # We do it one dim at a time for clarity/stability.
+    out_ds = slices
+    for d_i, d in enumerate(group_dims_eff[::-1]):
+        labels = list(ds.coords[d].values)
+        step = len(labels)
+
+        new_list = []
+        for j in range(0, len(out_ds), step):
+            block = xr.concat(out_ds[j : j + step], dim=d).assign_coords({d: labels})
+            new_list.append(block)
+        out_ds = new_list
+
+    merged = out_ds[0]
+
+    if add_to_ds:
+        # mutate in place like legacy apply() expects
+        ds.update(merged)
+        return ds
+
+    # If user asked for dict outputs, mimic legacy: return created vars only
+    created = {k: merged[k] for k in merged.data_vars if k not in ds.data_vars}    
+    return created
+
+
+def apply_crop_op_legacy(
     ds: xr.Dataset,
     func: Callable,
     source: Union[str, xr.DataArray] = "best_z",

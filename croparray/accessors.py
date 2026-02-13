@@ -39,9 +39,29 @@ class CropArrayIO(_BaseAccessor):
 @dataclass
 class CropArrayBuild(_BaseAccessor):
     """Builder convenience methods that don’t follow the ds-first pattern."""
+
     def create(self, *args, **kwargs):
         from .build import create_crop_array
         return create_crop_array(*args, **kwargs)
+
+    def make(self, *args, **kwargs):
+        from .build import make_croparrays
+        return make_croparrays(*args, **kwargs)
+
+    def open_measure_concat(self, *args, **kwargs):
+        from .build import open_measure_concat
+        return open_measure_concat(*args, **kwargs)
+
+# to show docstrings
+try:
+    from .build import create_crop_array, make_croparrays, open_measure_concat
+
+    CropArrayBuild.create.__doc__ = create_crop_array.__doc__
+    CropArrayBuild.make.__doc__ = make_croparrays.__doc__
+    CropArrayBuild.open_measure_concat.__doc__ = open_measure_concat.__doc__
+
+except Exception:
+    pass
 
 
 @dataclass
@@ -50,6 +70,21 @@ class CropArrayOps(_BaseAccessor):
     def apply(self, func, source="best_z", *args, **kwargs):
         from .crop_ops.apply import apply_crop_op
         return apply_crop_op(self.ds, func, source=source, *args, **kwargs)
+    # --- TEMP/TESTING: call the legacy implementation ---
+    def apply_legacy(self, func, source="best_z", *args, **kwargs):
+        from .crop_ops.apply import apply_crop_op_legacy
+        return apply_crop_op_legacy(self.ds, func, source=source, *args, **kwargs)
+
+# ---------------------------------------------------------
+# Forward real docstring from apply_crop_op to accessor
+# (must be outside the class)
+# ---------------------------------------------------------
+try:
+    from .crop_ops.apply import apply_crop_op
+    CropArrayOps.apply.__doc__ = apply_crop_op.__doc__
+except Exception:
+    # Avoid import/cycle problems during partial imports
+    pass
 
 
 @dataclass

@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple, Union, Literal
+from typing import Optional, Sequence, Tuple, Union, Literal, Any, Dict
 import numpy as np
 import xarray as xr
 import pandas as pd
 from pathlib import Path
+from datetime import datetime
+import json
 
-try:
-    __all__
-except NameError:
-    __all__ = []
-__all__ += ["standardize_video_axes","standardize_spots"]
+__all__ = ["standardize_video_axes","standardize_spots", "create_crop_array", "make_croparrays", "open_measure_concat"]
 
 _CANONICAL = ("fov", "f", "z", "y", "x", "ch")
 
@@ -38,7 +36,6 @@ def _detect_tracker_from_columns(cols) -> str:
     if {"xc", "yc", "f"}.issubset(cols_lc) or {"xc", "yc", "frame"}.issubset(cols_lc):
         return "croparray"
     return "unknown"
-
 
 def _detect_tracker_from_path(path: Path) -> str:
     # quick sniff: TrackMate has those POSITION_* headers on row 0
@@ -81,7 +78,6 @@ def _trackmate_units_from_csv(path: Path) -> dict:
                 units[col] = u
     return units
 
-
 def _read_trackmate_csv(path: Path) -> "pd.DataFrame":
     # robust TrackMate preamble handling (skips abbrev/units rows)
     import csv
@@ -113,7 +109,6 @@ def _read_trackmate_csv(path: Path) -> "pd.DataFrame":
 
     skiprows = list(range(1, start_row))
     return pd.read_csv(path, header=0, skiprows=skiprows)
-
 
 def _standardize_spots_df(
     df: "pd.DataFrame",
@@ -446,7 +441,6 @@ def standardize_spots(
         require_calibration_if_needed=require_calibration_if_needed,
     )
 
-
 def standardize_video_axes(
     video: np.ndarray,
     axes: Sequence[str],
@@ -490,7 +484,6 @@ def standardize_video_axes(
 
     perm = [axes2.index(ax) for ax in _CANONICAL]
     return np.transpose(video2, axes=perm)
-
 
 def _create_crop_array_dataset(video, df, **kwargs):
     """
@@ -990,7 +983,6 @@ def _create_crop_array_dataset(video, df, **kwargs):
 
     return ds
 
-
 def create_crop_array(
     video,
     df,
@@ -1036,8 +1028,6 @@ def create_crop_array(
         return CropArray(ds)
 
     return ds
-
-
 
 def make_croparrays(
     videos,
@@ -1181,6 +1171,161 @@ def make_croparrays(
         return written_paths
 
     return results[0] if len(results) == 1 else results
+
+def open_measure_concat(
+    *,
+    groups: Any,
+    dims: Sequence[str],
+    labels: Optional[Sequence[Optional[Sequence[str]]]] = None,
+    measure_kwargs: Optional[Dict[str, Any]] = None,
+    drop_vars=None,
+    join: str = "outer",
+    attach_provenance: bool = True,
+):
+    """
+    Open tracked croparrays, run measure_signal, and concatenate across nested groupings.
+
+    This is a high-level *workflow constructor* that hides the common boilerplate:
+
+      open_as_trackarray → measure_signal → concat along dims (outer→inner)
+
+    Parameters
+    ----------
+    groups
+        A nested list structure whose depth equals len(dims). The leaf level must be
+        a list of file paths (str/Path). Example for dims=["rep","exp","fov"]:
+
+            groups = [
+                [files_rep1_exp1, files_rep1_exp2],   # rep1: exp groups
+                [files_rep2_exp1, files_rep2_exp2],   # rep2
+            ]
+
+        where each `files_repX_expY` is a list of .nc file paths (one per fov).
+
+    dims
+        Grouping dimensions from outermost to innermost.
+        The final dim (dims[-1]) is used to concatenate the file list at each leaf
+        (e.g., "fov" or "cell").
+
+    labels
+        Optional labels per dimension (length must equal len(dims)).
+        Each entry can be:
+          - None: auto-label at that level
+              * leaf level: filename stems
+              * higher levels: f"{dim}{i}"
+          - list[str]: explicit labels for that level
+
+        Example: labels=[["rep1","rep2"], ["-ZNF598","+ZNF598"], None]
+
+    measure_kwargs
+        Keyword args forwarded to `.measure_signal(**measure_kwargs)` for each file.
+
+    drop_vars
+        Passed to `ca.tools.open_as_trackarray(..., drop_vars=drop_vars)`.
+
+    join
+        Passed to concat at each level (often "outer" in your workflows).
+
+    attach_provenance
+        If True, attaches JSON metadata to ds.attrs["provenance_json"].
+
+    Returns
+    -------
+    TrackArray
+        Concatenated TrackArray wrapper.
+
+    Notes
+    -----
+    - This function intentionally concatenates *hierarchically* to keep memory
+      reasonable and to mirror the experiment structure.
+    - If you want different behavior at the leaf (e.g., leaf dim is "cell"),
+      just change dims[-1] and provide a corresponding leaf file list.
+    """
+    import croparray as ca  # local import to avoid cycles on package import
+
+    if not dims:
+        raise ValueError("dims must be non-empty")
+
+    measure_kwargs = {} if measure_kwargs is None else dict(measure_kwargs)
+
+    # normalize labels
+    if labels is None:
+        labels = [None] * len(dims)
+    else:
+        labels = list(labels)
+        if len(labels) != len(dims):
+            raise ValueError(f"labels must have same length as dims ({len(labels)} vs {len(dims)})")
+
+    def _is_leaf(node: Any) -> bool:
+        return isinstance(node, (list, tuple)) and len(node) > 0 and all(isinstance(v, (str, Path)) for v in node)
+
+    def _default_leaf_labels(files: Sequence[Union[str, Path]]) -> list[str]:
+        return [Path(f).stem for f in files]
+
+    prov = []
+
+    def _recurse(node: Any, level: int):
+        dim = dims[level]
+        lvl_labels = labels[level]
+
+        # ---- leaf: node is list of files ----
+        if _is_leaf(node):
+            files = [str(f) for f in node]
+            tas = [
+                ca.tools.open_as_trackarray(fn, drop_vars=drop_vars, as_object=True).measure_signal(**measure_kwargs)
+                for fn in files
+            ]
+
+            leaf_labels = lvl_labels if lvl_labels is not None else _default_leaf_labels(files)
+
+            out = ca.concat(cas=tas, dim=dim, labels=leaf_labels, join=join)
+
+            prov.append(
+                dict(
+                    dim=dim,
+                    level=level,
+                    labels=list(leaf_labels),
+                    directories=sorted({str(Path(f).parent) for f in files}),
+                    files=[Path(f).name for f in files],
+                )
+            )
+            return out
+
+        # ---- non-leaf: list of subgroups ----
+        if not isinstance(node, (list, tuple)):
+            raise TypeError(f"Expected list/tuple at dim={dim} (level {level}), got {type(node)}")
+
+        children = [_recurse(child, level + 1) for child in node]
+
+        this_labels = lvl_labels
+        if this_labels is None:
+            this_labels = [f"{dim}{i}" for i in range(len(children))]
+        else:
+            if len(this_labels) != len(children):
+                raise ValueError(f"labels for dim={dim} must match group length ({len(this_labels)} vs {len(children)})")
+
+        out = ca.concat(cas=children, dim=dim, labels=this_labels, join=join)
+
+        prov.append(dict(dim=dim, level=level, labels=list(this_labels), n_children=len(children)))
+        return out
+
+    ta = _recurse(groups, level=0)
+
+    if attach_provenance:
+        ta.ds.attrs["provenance_json"] = json.dumps(
+            dict(
+                timestamp=datetime.now().isoformat(timespec="seconds"),
+                dims=list(dims),
+                labels=[list(x) if x is not None else None for x in labels],
+                measure_kwargs=measure_kwargs,
+                drop_vars=drop_vars,
+                join=join,
+                hierarchy=prov,
+            ),
+            indent=2,
+        )
+
+    return ta
 
 
 # ============================================================
