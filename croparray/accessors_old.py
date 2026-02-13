@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+from typing import Sequence
+
+# Re-export the generated dataset-aware accessors
+from ._accessors_generated import (
+    _BaseAccessor,
+    CropArrayPlot,
+    CropArrayMeasure,
+    CropArrayDF,
+    CropArrayView,
+    CropArrayTrack as _GenCropArrayTrack,
+    TrackArrayPlot,
+    TrackArrayMeasure,
+    TrackArrayView,
+    TrackArrayDF,
+    install_generated_accessors,  
+)
+
+# ----------------------------
+# Hand-written "thin" accessors that are NOT purely ds-first
+# (keep these minimal; move to generated later only if you make them ds-first)
+# ----------------------------
+
+@dataclass
+class CropArrayIO(_BaseAccessor):
+    """I/O convenience methods that don’t follow the ds-first pattern."""
+    def open(self, *args, **kwargs):
+        from .io import open_croparray
+        return open_croparray(*args, **kwargs)
+
+    def open_zarr(self, *args, **kwargs):
+        from .io import open_croparray_zarr
+        return open_croparray_zarr(*args, **kwargs)
+
+
+@dataclass
+class CropArrayBuild(_BaseAccessor):
+    """Builder convenience methods that don’t follow the ds-first pattern."""
+
+    def create(self, *args, **kwargs):
+        from .build import create_crop_array
+        return create_crop_array(*args, **kwargs)
+
+    def make(self, *args, **kwargs):
+        from .build import make_croparrays
+        return make_croparrays(*args, **kwargs)
+
+    def open_measure_concat(self, *args, **kwargs):
+        from .build import open_measure_concat
+        return open_measure_concat(*args, **kwargs)
+
+# to show docstrings
+try:
+    from .build import create_crop_array, make_croparrays, open_measure_concat
+
+    CropArrayBuild.create.__doc__ = create_crop_array.__doc__
+    CropArrayBuild.make.__doc__ = make_croparrays.__doc__
+    CropArrayBuild.open_measure_concat.__doc__ = open_measure_concat.__doc__
+
+except Exception:
+    pass
+
+
+@dataclass
+class CropArrayOps(_BaseAccessor):
+    """Ops wrapper (kept hand-written; not strictly ds-first)."""
+    def apply(self, func, source="best_z", *args, **kwargs):
+        from .crop_ops.apply import apply_crop_op
+        return apply_crop_op(self.ds, func, source=source, *args, **kwargs)
+    # --- TEMP/TESTING: call the legacy implementation ---
+    def apply_legacy(self, func, source="best_z", *args, **kwargs):
+        from .crop_ops.apply import apply_crop_op_legacy
+        return apply_crop_op_legacy(self.ds, func, source=source, *args, **kwargs)
+
+# ---------------------------------------------------------
+# Forward real docstring from apply_crop_op to accessor
+# (must be outside the class)
+# ---------------------------------------------------------
+try:
+    from .crop_ops.apply import apply_crop_op
+    CropArrayOps.apply.__doc__ = apply_crop_op.__doc__
+except Exception:
+    # Avoid import/cycle problems during partial imports
+    pass
+
+
+@dataclass
+class CropArrayTrack(_GenCropArrayTrack):
+    """
+    Extend generated track accessor with one ergonomic helper.
+    Keeps your prior behavior where conversion returns a TrackArray object.
+    """
+    def to_trackarray(self, *args, **kwargs):
+        from .tracking import to_track_array
+        return to_track_array(self.ds, *args, **kwargs)
+
+@dataclass
+class CropArrayNapari(_BaseAccessor):
+    def montage_viewer(self, *args, **kwargs):
+        from .napari_view import montage_viewer as _impl
+        return _impl(self.ds, *args, **kwargs)
+    def manual_filter_montage(self, *args, **kwargs):
+        from .napari_view import manual_filter_montage as _impl
+        return _impl(self.ds, *args, **kwargs)
+
+
+@dataclass
+class TrackArrayNapari(_BaseAccessor):
+    def montage_viewer(self, *args, **kwargs):
+        from .napari_view import montage_viewer as _impl
+        return _impl(self.ds, *args, **kwargs)
+    def manual_filter_montage(self, *args, **kwargs):
+        from .napari_view import manual_filter_montage as _impl
+        return _impl(self.ds, *args, **kwargs)
+
+
+# ----------------------------
+# Seaborn figure-level wrappers (delegate to croparray.plot)
+# ----------------------------
+
+def _relplot(self, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    from . import plot as _plot
+    return _plot.relplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+def _displot(self, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    from . import plot as _plot
+    return _plot.displot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+def _catplot(self, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    from . import plot as _plot
+    return _plot.catplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+# Attach to both plot accessors (CropArray + TrackArray)
+CropArrayPlot.relplot = _relplot
+CropArrayPlot.displot = _displot
+CropArrayPlot.catplot = _catplot
+
+TrackArrayPlot.relplot = _relplot
+TrackArrayPlot.displot = _displot
+TrackArrayPlot.catplot = _catplot
+
+
+
+def _install_all_accessors():
+    # Local imports to avoid circular dependencies
+    from .crop_array_object import CropArray
+    from .trackarray.object import TrackArray
+    install_generated_accessors(CropArray, TrackArray)
+
+_install_all_accessors()

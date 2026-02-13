@@ -431,9 +431,761 @@ CropArrayView.manual_filter_montage.__wrapped__ = _impl_CropArrayView_manual_fil
 CropArrayView.manual_filter_montage.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayView_manual_filter_montage).parameters.values())[1:])
 
 
+from croparray.tracking import perform_tracking_with_exclusions as _impl_CropArrayTrack_perform_tracking_with_exclusions
+from croparray.tracking import to_track_array as _impl_CropArrayTrack_to_track_array
+
 @dataclass
 class CropArrayTrack(_BaseAccessor):
     """Generated accessor methods."""
+    def perform_tracking_with_exclusions(self, search_range=10, memory=1):
+        """Perform particle tracking on DataFrame with option to exclude certain data points 
+and assign them a default track ID.
+
+Parameters:
+----------
+df: DataFrame
+    DataFrame containing particle coordinates and potentially other data.
+search_range: int
+    Maximum distance particles can move between frames.
+memory: int
+    Maximum number of frames during which a particle can vanish, then reappear, and still be considered the same particle.
+
+Returns:
+-------
+DataFrame with tracked particles, including excluded ones assigned a default track ID."""
+        return _impl_CropArrayTrack_perform_tracking_with_exclusions(self.ds, search_range, memory)
+
+    def to_track_array(self, channel_to_track=0, min_track_length=5, search_range=10, memory=1):
+        """Track particles in a given croparray dataset and update the croparray dataset with new track IDs,
+filtering out short tracks.
+
+Parameters:
+- ca: The dataset array
+- channel_to_track: Channel index used for tracking particles
+- min_track_length: Minimum length required for a track to be kept
+- search_range: Search range for linking particles to form tracks
+- memory: Number of frames a track can skip"""
+        return _impl_CropArrayTrack_to_track_array(self.ds, channel_to_track, min_track_length, search_range, memory)
+
+
+CropArrayTrack.perform_tracking_with_exclusions.__doc__ = _impl_CropArrayTrack_perform_tracking_with_exclusions.__doc__
+CropArrayTrack.perform_tracking_with_exclusions.__wrapped__ = _impl_CropArrayTrack_perform_tracking_with_exclusions
+CropArrayTrack.perform_tracking_with_exclusions.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayTrack_perform_tracking_with_exclusions).parameters.values())[1:])
+CropArrayTrack.to_track_array.__doc__ = _impl_CropArrayTrack_to_track_array.__doc__
+CropArrayTrack.to_track_array.__wrapped__ = _impl_CropArrayTrack_to_track_array
+CropArrayTrack.to_track_array.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayTrack_to_track_array).parameters.values())[1:])
+
+
+from croparray.crop_ops.apply import apply_crop_op as _impl_CropArrayOps_apply_crop_op
+from croparray.crop_ops.apply import apply_crop_op_legacy as _impl_CropArrayOps_apply_crop_op_legacy
+
+@dataclass
+class CropArrayOps(_BaseAccessor):
+    """Generated accessor methods."""
+    def apply_crop_op(self, func, source='best_z', group_dims=None, group_exclude_dims=('track_id', 't', 'ch', 'x', 'y', 'z'), channels=None, channel_dim='ch', input_core_dims=('x', 'y'), output_core_dims=('x', 'y'), out_name='ch{ch}_op', func_kwargs=None, compute_sum_xy=False, sum_name='{out}_sig', sum_dims=('x', 'y'), add_to_ds=True):
+        """Apply a per-crop image operation, automatically grouping over non-core dims.
+
+Default behavior:
+  - Slices ds over all dims except group_exclude_dims (e.g. fov/exp/cell/rep)
+  - Runs the legacy vectorized implementation on each slice (drop=True)
+  - Concats slices back
+
+This preserves the *exact* semantics of apply_crop_op_legacy within each slice,
+which is critical for quantile/threshold based operations.
+
+Power users: call apply_crop_op_legacy(...) directly to bypass grouping."""
+        return _impl_CropArrayOps_apply_crop_op(self.ds, func, source, group_dims=group_dims, group_exclude_dims=group_exclude_dims, channels=channels, channel_dim=channel_dim, input_core_dims=input_core_dims, output_core_dims=output_core_dims, out_name=out_name, func_kwargs=func_kwargs, compute_sum_xy=compute_sum_xy, sum_name=sum_name, sum_dims=sum_dims, add_to_ds=add_to_ds)
+
+    def apply_crop_op_legacy(self, func, source='best_z', channels=None, channel_dim='ch', input_core_dims=('x', 'y'), output_core_dims=('x', 'y'), out_name='ch{ch}_op', func_kwargs=None, compute_sum_xy=False, sum_name='{out}_sig', sum_dims=('x', 'y'), add_to_ds=True):
+        """Apply a per-crop image operation across a crop dataset using `xr.apply_ufunc`,
+optionally iterating over channels, and optionally computing a per-crop scalar
+summary (e.g., summed signal).
+
+Conceptually, this function executes the “known-good” pattern:
+
+    xr.apply_ufunc(
+        func,
+        da.sel(ch=<one channel>),
+        input_core_dims=[["x", "y"]],
+        output_core_dims=[["x", "y"]],
+        kwargs=...,
+        vectorize=True,
+    )
+
+and does so for every crop (and for each requested channel, if present).
+
+Parameters
+----------
+ds
+    The dataset containing crop data variables (e.g., a stack of crops across time/track/crop_id).
+func
+    A function to apply to each crop. It must accept an array-like input matching
+    `input_core_dims` (typically a 2D image) and return an array-like output matching
+    `output_core_dims`. Additional keyword arguments may be provided via `func_kwargs`.
+
+    Typical examples: spot detection / QC, filtering, background subtraction, etc.
+source
+    Either the name of a DataArray in `ds` (default: `"best_z"`) or an explicit
+    `xr.DataArray` to process.
+channels
+    Channel selection behavior when `channel_dim` exists in the source DataArray:
+
+    - `None` (default): process **all** channels present in `da.coords[channel_dim]`.
+    - `int`: process only that channel (e.g., `channels=0`).
+    - `Sequence[int]`: process only those channels (e.g., `channels=[0]` or `[0, 1]`).
+
+    If the source DataArray does **not** contain `channel_dim`, this argument is ignored
+    and the operation is applied once (i.e., “single-channel” mode).
+channel_dim
+    Name of the channel dimension in the source DataArray (default: `"ch"`).
+input_core_dims
+    Core dimensions consumed by `func` (default: `("x", "y")`). These are passed to
+    `xr.apply_ufunc(..., input_core_dims=[...])`.
+output_core_dims
+    Core dimensions produced by `func` (default: `("x", "y")`). These are passed to
+    `xr.apply_ufunc(..., output_core_dims=[...])`.
+out_name
+    Output variable name template. If channel iteration is used, `{ch}` is formatted
+    with the channel index (e.g., `"ch0_spots"`). If no channel dimension exists,
+    `{ch}` is formatted as `"NA"` by default.
+func_kwargs
+    Optional keyword arguments forwarded to `func`. If `None`, treated as `{}`.
+compute_sum_xy
+    If True, compute an additional summary signal per crop by summing `out` over
+    `sum_dims` and store it as a second output variable.
+sum_name
+    Name template for the summed-signal output, formatted with `{out}` set to the
+    generated `out_name` (default: `"{out}_sig"`).
+sum_dims
+    Dimensions to sum over when `compute_sum_xy=True` (default: `("x", "y")`).
+    Use this to control whether you sum only spatial dims, or include others.
+add_to_ds
+    If True (default), add outputs back into `ds` and return the updated dataset.
+    If False, return a dict mapping output variable names to DataArrays.
+
+Returns
+-------
+xr.Dataset or Dict[str, xr.DataArray]
+    - If `add_to_ds=True`: the input dataset `ds`, augmented with new variables.
+    - If `add_to_ds=False`: a dict of created outputs (and optional summaries).
+
+Notes
+-----
+- This function relies on `vectorize=True` in `xr.apply_ufunc`, meaning `func` is
+  applied independently across non-core dimensions (crop index, time, track_id, etc.).
+- Channel handling is done via `da.sel({channel_dim: ch})` per channel.
+- If you request channels that are not present in the DataArray coordinates,
+  a clear `ValueError` is raised.
+
+Examples
+--------
+Process all channels in `best_z`:
+
+    ds = apply_crop_op(ds, spot_detect_and_qc, source="best_z",
+                       out_name="ch{ch}_spots",
+                       func_kwargs={"minmass": 150, "size": 3})
+
+Process only channel 0:
+
+    ds = apply_crop_op(ds, spot_detect_and_qc, source="best_z",
+                       channels=[0],
+                       out_name="ch{ch}_spots",
+                       func_kwargs={"minmass": 150, "size": 3})
+
+Process channels 0 and 1 and also compute summed signal per crop:
+
+    ds = apply_crop_op(ds, spot_detect_and_qc, source="best_z",
+                       channels=[0, 1],
+                       out_name="ch{ch}_spots",
+                       func_kwargs={"minmass": 150, "size": 3},
+                       compute_sum_xy=True,
+                       sum_name="{out}_sig")"""
+        return _impl_CropArrayOps_apply_crop_op_legacy(self.ds, func, source, channels=channels, channel_dim=channel_dim, input_core_dims=input_core_dims, output_core_dims=output_core_dims, out_name=out_name, func_kwargs=func_kwargs, compute_sum_xy=compute_sum_xy, sum_name=sum_name, sum_dims=sum_dims, add_to_ds=add_to_ds)
+
+
+CropArrayOps.apply_crop_op.__doc__ = _impl_CropArrayOps_apply_crop_op.__doc__
+CropArrayOps.apply_crop_op.__wrapped__ = _impl_CropArrayOps_apply_crop_op
+CropArrayOps.apply_crop_op.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayOps_apply_crop_op).parameters.values())[1:])
+CropArrayOps.apply_crop_op_legacy.__doc__ = _impl_CropArrayOps_apply_crop_op_legacy.__doc__
+CropArrayOps.apply_crop_op_legacy.__wrapped__ = _impl_CropArrayOps_apply_crop_op_legacy
+CropArrayOps.apply_crop_op_legacy.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayOps_apply_crop_op_legacy).parameters.values())[1:])
+
+
+from croparray.napari_view import montage_viewer as _impl_CropArrayNapari_montage_viewer
+from croparray.napari_view import manual_filter_montage as _impl_CropArrayNapari_manual_filter_montage
+
+@dataclass
+class CropArrayNapari(_BaseAccessor):
+    """Generated accessor methods."""
+    def montage_viewer(self, row, col, show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, image_contrast=None, tile_overlay_contrast=None, tile_overlay_opacity=0.35, default_blending='additive', colormaps=None, show_tile_text=True, tile_text_name='tile_text', tile_text_size=14, tile_text_color='white'):
+        """Create a napari viewer for a montage with smart defaults:
+  - mask-like layers => add_labels
+  - image-like layers (has r,c) => add_image with robust contrast
+  - non-xy layers (e.g., (track_id,t) or (n,t)) => drawn as per-tile overlays
+
+Parameters
+----------
+ca_or_ta : xr.Dataset
+    The CropArray/TrackArray dataset.
+row, col : str
+    The montage tiling dims you want (e.g. row="track_id", col="track_id"; row="n", col="t").
+show : iterable[str]
+    Variable names from the montage dataset to display.
+ch : int
+    Channel to show for image-like layers that have a 'ch' dimension.
+z_index : int
+    z-slice to show if z is present.
+viewer : napari.Viewer, optional
+    If provided, add layers into this viewer; otherwise create a new one.
+image_contrast : 
+    Percentiles for image layers (default 0–99.5). 
+tile_overlay_contrast : 
+    Percentiles for tile overlays (default 5–95).
+tile_overlay_opacity : float
+    Opacity used for tile overlays and labels.
+default_blending : str
+    Napari blending mode for image layers.
+colormaps : dict[str,str], optional
+    Colormap per layer name; falls back to 'gray' for images and 'magenta' for overlays.
+
+Returns
+-------
+viewer, layers_dict
+    layers_dict maps requested layer name -> napari layer object."""
+        return _impl_CropArrayNapari_montage_viewer(self.ds, row=row, col=col, show=show, ch=ch, z_index=z_index, viewer=viewer, image_contrast=image_contrast, tile_overlay_contrast=tile_overlay_contrast, tile_overlay_opacity=tile_overlay_opacity, default_blending=default_blending, colormaps=colormaps, show_tile_text=show_tile_text, tile_text_name=tile_text_name, tile_text_size=tile_text_size, tile_text_color=tile_text_color)
+
+    def manual_filter_montage(self, row, col, filter_name='manual_filter', show=('best_z', 'ch0_mask'), ch=0, z_index=0, viewer=None, write_back=True, overlay_opacity=0.35, single_click_delay_ms=100, colormaps=None, label_colors=None, output_dir=None, show_click_info=False, show_tile_text=False):
+        """Launch an interactive napari montage viewer for manual binary filtering
+of tiles (e.g., track_id × t) and create/update a filter table.
+
+This function allows interactive selection of tiles in a montage layout.
+Edits are staged in memory and can be committed to the dataset or written
+to disk via UI controls.
+
+Interaction model
+-----------------
+- Alt+Click:
+    Toggle a single (tile, t) entry.
+- Shift+Click:
+    Toggle the selected tile across all timepoints (row operation).
+- Click-drag:
+    Navigation only (pan/zoom). No edits occur without modifiers.
+
+Parameters
+----------
+ds : xr.Dataset
+    CropArray or TrackArray dataset containing tile identity dimension
+    (e.g., ``track_id`` or ``n``) and time dimension ``t``.
+
+row, col : str
+    Dimensions used to construct the montage grid (e.g.,
+    ``row="track_id", col="t"`` or square layouts).
+
+filter_name : str, default "manual_filter"
+    Name of the binary filter variable to create or update in ``ds``.
+
+show : Iterable[str]
+    Dataset variables to display in the montage (image or mask layers).
+
+ch : int or sequence of int
+    Channel(s) to display for image layers.
+
+z_index : int
+    Z-plane index if the dataset contains a ``z`` dimension.
+
+viewer : napari.Viewer, optional
+    Existing viewer to reuse. If None, a new viewer is created.
+
+write_back : bool, default True
+    If True, staged edits can be written into ``ds[filter_name]`` via
+    the "Save/Update" UI control.
+
+overlay_opacity : float, default 0.35
+    Opacity of the manual filter overlay.
+
+single_click_delay_ms : int, default 100
+    Delay used to distinguish single-click from double-click actions.
+
+colormaps : dict, optional
+    Mapping from layer name to napari colormap.
+
+label_colors : dict, optional
+    Mapping from label integer value (e.g., 1) to display color.
+
+output_dir : str, optional
+    Directory to write dataset when "Save to file" is pressed.
+    If None, the original dataset location is used if available.
+
+show_click_info : bool, default False
+    If True, display a debugging overlay showing clicked tile identity.
+
+show_tile_text : bool, default False
+    If True, display per-tile text labels in the montage view.
+
+Returns
+-------
+viewer : napari.Viewer
+    The napari viewer instance.
+
+layers : dict[str, Any]
+    Mapping from layer names to napari layer objects.
+
+filter_table : xr.DataArray
+    The staged binary filter table with dimensions
+    (*context_dims, tile_dim, t). Edits are applied here until committed.
+
+Notes
+-----
+- The filter table is context-aware: additional dataset dimensions
+  (e.g., exp, cell, fov) are preserved and editable via napari sliders.
+- Edits are staged in memory until "Save/Update" is pressed.
+- "Save to file" optionally overwrites the source dataset after confirmation."""
+        return _impl_CropArrayNapari_manual_filter_montage(self.ds, row=row, col=col, filter_name=filter_name, show=show, ch=ch, z_index=z_index, viewer=viewer, write_back=write_back, overlay_opacity=overlay_opacity, single_click_delay_ms=single_click_delay_ms, colormaps=colormaps, label_colors=label_colors, output_dir=output_dir, show_click_info=show_click_info, show_tile_text=show_tile_text)
+
+
+CropArrayNapari.montage_viewer.__doc__ = _impl_CropArrayNapari_montage_viewer.__doc__
+CropArrayNapari.montage_viewer.__wrapped__ = _impl_CropArrayNapari_montage_viewer
+CropArrayNapari.montage_viewer.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayNapari_montage_viewer).parameters.values())[1:])
+CropArrayNapari.manual_filter_montage.__doc__ = _impl_CropArrayNapari_manual_filter_montage.__doc__
+CropArrayNapari.manual_filter_montage.__wrapped__ = _impl_CropArrayNapari_manual_filter_montage
+CropArrayNapari.manual_filter_montage.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayNapari_manual_filter_montage).parameters.values())[1:])
+
+
+from croparray.build import standardize_video_axes as _impl_CropArrayBuild_standardize_video_axes
+from croparray.build import standardize_spots as _impl_CropArrayBuild_standardize_spots
+from croparray.build import create_crop_array as _impl_CropArrayBuild_create_crop_array
+from croparray.build import make_croparrays as _impl_CropArrayBuild_make_croparrays
+from croparray.build import open_measure_concat as _impl_CropArrayBuild_open_measure_concat
+
+@dataclass
+class CropArrayBuild(_BaseAccessor):
+    """Generated accessor methods."""
+    def standardize_video_axes(self, video, axes, add_missing_singletons=True):
+        """Reorder raw video into croparray canonical order: (fov, f, z, y, x, ch).
+
+`axes` must describe the CURRENT order of `video`, e.g. res.axes from ca.gui.label_video_axes()."""
+        return _impl_CropArrayBuild_standardize_video_axes(video, axes, add_missing_singletons=add_missing_singletons)
+
+    def standardize_spots(self, source, tracker='auto', fov=0, xy_um_per_px=None, z_um_per_plane=None, keep_cols=None, require_calibration_if_needed=True):
+        """Convert tracker output into a croparray-ready spots dataframe.
+
+Output (always includes):
+  - fov, id, f, yc, xc, zc
+Output (optional):
+  - track_id (if present in the input)
+Plus:
+  - extra columns requested by `keep_cols` (or default intensity columns)
+
+Unit handling (TrackMate)
+-------------------------
+TrackMate exports POSITION_X/Y/Z in the *image spatial units* at export time
+(often micron/um; sometimes pixel). We read the units row from the CSV and:
+
+  - if units indicate pixel/px: treat values as already in pixels/planes
+  - if units indicate micron/um: convert to pixels/planes using xy_um_per_px / z_um_per_plane
+  - if units indicate nm: convert to pixels/planes using xy_um_per_px / z_um_per_plane (with nm scaling)
+
+If conversion is needed but calibration is missing:
+  - if require_calibration_if_needed=True (default), raise ValueError
+  - else, fall back to treating coordinates as already pixel/plane units
+
+Parameters
+----------
+source
+    Path to a CSV file (TrackMate/TrackPy/etc.) or a pandas DataFrame.
+tracker
+    "auto" | "trackmate" | "trackpy" | "croparray"
+fov
+    Field-of-view index to assign to all rows in this spots table.
+xy_um_per_px
+    Microns per pixel (used when TrackMate units are micron/um/nm).
+z_um_per_plane
+    Microns per z-plane (used when TrackMate units are micron/um/nm).
+keep_cols
+    Extra columns to retain in the output. If None, keeps intensity-like columns by default.
+require_calibration_if_needed
+    If True, raise when TrackMate units require conversion but calibration is missing.
+
+Returns
+-------
+pd.DataFrame"""
+        return _impl_CropArrayBuild_standardize_spots(source, tracker=tracker, fov=fov, xy_um_per_px=xy_um_per_px, z_um_per_plane=z_um_per_plane, keep_cols=keep_cols, require_calibration_if_needed=require_calibration_if_needed)
+
+    def create_crop_array(self, video, df, axes=None, as_object=True, **kwargs):
+        """    Build a crop-array from raw inputs.
+
+    Parameters
+    ----------
+    video
+        Input video array. If `axes` is None, this must already be ordered
+        (fov, f, z, y, x, ch). If `axes` is provided, `video` may be in any
+        order described by `axes` (e.g. from `ca.gui.label_video_axes(...).axes`).
+    df
+        Spot / crop definition table.
+    axes : sequence of str, optional
+        Axis labels describing the CURRENT order of `video`.
+        If provided, `video` will be reordered into croparray canonical order:
+        (fov, f, z, y, x, ch) via `standardize_video_axes(video, axes)`.
+        Accepted labels: fov, f, z, y, x, ch (synonyms: t->f, c->ch).
+    as_object : bool, default True
+        If True, return a CropArray wrapper (method-style API).
+        If False, return the raw xarray.Dataset (legacy behavior).
+    **kwargs
+        Passed through to `_create_crop_array_dataset`.
+
+    Returns
+    -------
+    CropArray or xarray.Dataset
+    
+
+---
+
+
+    Create a crop-array xarray.Dataset from a 6D video and a dataframe of detected spots.
+
+    This function extracts fixed-size crops around detected spots from a time-lapse
+    3D (z-stack) video and organizes them into a structured xarray Dataset (“crop array”).
+    Crops are always centered in the lateral (x,y) directions; axial (z) handling depends
+    on whether z positions are provided.
+
+    Parameters
+    ----------
+    video : numpy.ndarray
+        A 6D numpy array containing the raw image data with dimensions ordered as:
+            (fov, f, z, y, x, ch)
+
+        where:
+            fov : field of view
+            f   : frame (time)
+            z   : axial plane index
+            y   : lateral y coordinate
+            x   : lateral x coordinate
+            ch  : imaging channel
+
+    df : pandas.DataFrame
+        DataFrame describing the detected spots to be cropped. At minimum, the following
+        columns are required:
+
+            - 'fov' : field-of-view index (integer or filename-like identifier)
+            - 'f'   : frame index (integer, starting at 0)
+            - 'xc'  : x-position of the spot center in **movie pixel coordinates**
+            - 'yc'  : y-position of the spot center in **movie pixel coordinates**
+
+        Optional columns:
+
+            - 'zc' : axial (z) position of the spot center in **movie z-index units**.
+                    May be float (sub-plane precision). If provided together with
+                    `z_pad > 0`, crops will be extracted from a z-slab centered on this
+                    position.
+            - 'id' : integer spot identifier. If missing, a unique id is generated.
+            - 'track_id' : integer track identifier (-1 indicates untracked).
+            - Any additional numeric columns will be converted into per-crop xarray
+            variables with dimensions (fov, n, t).
+
+    xy_pad : int, optional
+        Number of pixels to pad on either side of the crop center in the x and y directions.
+        Each crop will have size (2*xy_pad + 1, 2*xy_pad + 1) in (y, x).
+
+    z_pad : int, optional
+        Number of z-planes to include on either side of the provided z center.
+        If `z_pad > 0` and df contains a 'zc' column, crops are extracted as a z-slab of
+        depth (2*z_pad + 1) centered on the rounded z index.
+        If `z_pad == 0` or 'zc' is not provided, all z planes are retained.
+
+    dx, dy, dz : float, optional
+        Physical size of a pixel in the x, y, and z directions, respectively.
+        These values are stored as metadata and used for coordinate construction, but do
+        not affect cropping.
+
+    dt : float, optional
+        Time interval between consecutive frames. Stored as metadata.
+
+    homography : list of numpy.ndarray, optional
+        A list of 3×3 homography matrices, one per channel, used to correct lateral (x,y)
+        misalignments between channels. Homographies are applied to the *float* (xc, yc)
+        coordinates prior to cropping.
+
+    Returns
+    -------
+    xarray.Dataset
+        A crop-array dataset with coordinates:
+            - fov : field of view
+            - n   : crop index (spot counter per frame per fov)
+            - t   : time
+            - z   : axial coordinate (full stack or slab-relative)
+            - y   : lateral y coordinate (centered on 0)
+            - x   : lateral x coordinate (centered on 0)
+            - ch  : channel
+
+        Core data variables include:
+
+        1. int : (fov, n, t, z, y, x, ch)
+            Cropped intensity data.
+
+        2. xc, yc, zc : (fov, n, t, ch)
+            Global **movie-coordinate** spot positions stored as floats.
+            These are suitable for trajectory analysis, MSD calculations, and spatial
+            measurements.
+
+        3. xc_pix, yc_pix, zc_pix : (fov, n, t, ch)
+            Rounded integer pixel indices corresponding to the global positions.
+            These are used internally for indexing and cropping.
+
+        4. xc_pad, yc_pad : (fov, n, t, ch)
+            Pixel indices into the *padded* video used during crop extraction.
+
+        5. z_pos : (fov, n, t, ch)
+            Local z index into the stored z dimension used for best-z selection.
+            A value of -1 indicates an invalid or unknown z position.
+            This variable is consumed by `best_z_proj(use_z_pos=True)` and should not
+            be interpreted as a physical coordinate.
+
+        6. id : (fov, n, t)
+            Spot identifier.
+
+        7. track_id : (fov, n, t)
+            Track assignment (-1 = untracked).
+
+        Additional numeric columns in `df` are converted into per-crop variables with
+        dimensions (fov, n, t).
+
+    Notes
+    -----
+    - Global coordinates (`xc`, `yc`, `zc`) are never rounded and retain subpixel precision.
+    - Pixel index variables (`*_pix`, `*_pad`, `z_pos`) are used strictly for array indexing.
+    - When z-slab mode is active, the z coordinate of the dataset is slab-relative and
+    centered at zero; the original global z position is preserved in `zc`.
+    - Crops that cannot be extracted due to out-of-bounds coordinates remain zero-filled.
+    """
+        return _impl_CropArrayBuild_create_crop_array(video, df, axes=axes, as_object=as_object, **kwargs)
+
+    def make_croparrays(self, videos, spots, out_dir=None, out_ext='.nc', axes=None, define_axes=True, axes_source_index=0, tracker='auto', xy_um_per_px=None, z_um_per_plane=None, keep_cols=None, xy_pad=10, z_pad=1, dx=None, dy=None, dz=None, dt=None, units=None, date=None, as_object=False, skip_existing=True, progress=True, notes='A croparray built from a tracking file and a video.'):
+        """High-level convenience builder that accepts either:
+  - single (video, spots) OR
+  - lists of (videos, spots)
+
+It standardizes video axes, standardizes spots tables, builds croparrays,
+and optionally writes .nc files.
+
+Behavior:
+  - Never overwrites existing outputs.
+  - If out_dir is provided and skip_existing=True, existing .nc files are skipped.
+
+Returns:
+  - If out_dir is None: returns a single dataset/object (single input) or list of them (batch)
+  - If out_dir is provided: returns list of output paths written (skipped files omitted)"""
+        return _impl_CropArrayBuild_make_croparrays(videos, spots, out_dir=out_dir, out_ext=out_ext, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, tracker=tracker, xy_um_per_px=xy_um_per_px, z_um_per_plane=z_um_per_plane, keep_cols=keep_cols, xy_pad=xy_pad, z_pad=z_pad, dx=dx, dy=dy, dz=dz, dt=dt, units=units, date=date, as_object=as_object, skip_existing=skip_existing, progress=progress, notes=notes)
+
+    def open_measure_concat(self, groups, dims, labels=None, measure_kwargs=None, drop_vars=None, join='outer', attach_provenance=True):
+        """Open tracked croparrays, run measure_signal, and concatenate across nested groupings.
+
+This is a high-level *workflow constructor* that hides the common boilerplate:
+
+  open_as_trackarray → measure_signal → concat along dims (outer→inner)
+
+Parameters
+----------
+groups
+    A nested list structure whose depth equals len(dims). The leaf level must be
+    a list of file paths (str/Path). Example for dims=["rep","exp","fov"]:
+
+        groups = [
+            [files_rep1_exp1, files_rep1_exp2],   # rep1: exp groups
+            [files_rep2_exp1, files_rep2_exp2],   # rep2
+        ]
+
+    where each `files_repX_expY` is a list of .nc file paths (one per fov).
+
+dims
+    Grouping dimensions from outermost to innermost.
+    The final dim (dims[-1]) is used to concatenate the file list at each leaf
+    (e.g., "fov" or "cell").
+
+labels
+    Optional labels per dimension (length must equal len(dims)).
+    Each entry can be:
+      - None: auto-label at that level
+          * leaf level: filename stems
+          * higher levels: f"{dim}{i}"
+      - list[str]: explicit labels for that level
+
+    Example: labels=[["rep1","rep2"], ["-ZNF598","+ZNF598"], None]
+
+measure_kwargs
+    Keyword args forwarded to `.measure_signal(**measure_kwargs)` for each file.
+
+drop_vars
+    Passed to `ca.tools.open_as_trackarray(..., drop_vars=drop_vars)`.
+
+join
+    Passed to concat at each level (often "outer" in your workflows).
+
+attach_provenance
+    If True, attaches JSON metadata to ds.attrs["provenance_json"].
+
+Returns
+-------
+TrackArray
+    Concatenated TrackArray wrapper.
+
+Notes
+-----
+- This function intentionally concatenates *hierarchically* to keep memory
+  reasonable and to mirror the experiment structure.
+- If you want different behavior at the leaf (e.g., leaf dim is "cell"),
+  just change dims[-1] and provide a corresponding leaf file list."""
+        return _impl_CropArrayBuild_open_measure_concat(groups=groups, dims=dims, labels=labels, measure_kwargs=measure_kwargs, drop_vars=drop_vars, join=join, attach_provenance=attach_provenance)
+
+
+CropArrayBuild.standardize_video_axes.__doc__ = _impl_CropArrayBuild_standardize_video_axes.__doc__
+CropArrayBuild.standardize_video_axes.__wrapped__ = _impl_CropArrayBuild_standardize_video_axes
+CropArrayBuild.standardize_video_axes.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_standardize_video_axes).parameters.values()))
+CropArrayBuild.standardize_spots.__doc__ = _impl_CropArrayBuild_standardize_spots.__doc__
+CropArrayBuild.standardize_spots.__wrapped__ = _impl_CropArrayBuild_standardize_spots
+CropArrayBuild.standardize_spots.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_standardize_spots).parameters.values()))
+CropArrayBuild.create_crop_array.__doc__ = _impl_CropArrayBuild_create_crop_array.__doc__
+CropArrayBuild.create_crop_array.__wrapped__ = _impl_CropArrayBuild_create_crop_array
+CropArrayBuild.create_crop_array.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_create_crop_array).parameters.values()))
+CropArrayBuild.make_croparrays.__doc__ = _impl_CropArrayBuild_make_croparrays.__doc__
+CropArrayBuild.make_croparrays.__wrapped__ = _impl_CropArrayBuild_make_croparrays
+CropArrayBuild.make_croparrays.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_make_croparrays).parameters.values()))
+CropArrayBuild.open_measure_concat.__doc__ = _impl_CropArrayBuild_open_measure_concat.__doc__
+CropArrayBuild.open_measure_concat.__wrapped__ = _impl_CropArrayBuild_open_measure_concat
+CropArrayBuild.open_measure_concat.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_open_measure_concat).parameters.values()))
+
+
+from croparray.io import open_as_trackarray as _impl_CropArrayIO_open_as_trackarray
+from croparray.io import open_croparray as _impl_CropArrayIO_open_croparray
+from croparray.io import open_croparray_zarr as _impl_CropArrayIO_open_croparray_zarr
+
+@dataclass
+class CropArrayIO(_BaseAccessor):
+    """Generated accessor methods."""
+    def open_as_trackarray(self, path, drop_vars=('int',), drop_errors='ignore', as_object=True, **kwargs):
+        """Open a CropArray dataset and immediately convert it to a TrackArray.
+
+Parameters
+----------
+path : str
+    Path to a dataset readable by ``open_croparray`` (e.g. NetCDF).
+drop_vars : sequence of str or None, default ("int",)
+    Variables to drop from the underlying Dataset before track conversion.
+    Set to None or empty to disable dropping.
+drop_errors : {"ignore","raise"}, default "ignore"
+    Passed to ``Dataset.drop_vars``.
+as_object : bool, default True
+    If True, return a TrackArray wrapper. If False, return the raw Dataset.
+**kwargs
+    Additional keyword arguments forwarded to ``open_croparray``.
+
+Returns
+-------
+TrackArray or xarray.Dataset"""
+        return _impl_CropArrayIO_open_as_trackarray(path, drop_vars=drop_vars, drop_errors=drop_errors, as_object=as_object, **kwargs)
+
+    def open_croparray(self, path, as_object=True, load_manual_filters=True, **kwargs):
+        """Open a saved CropArray dataset and optionally wrap it as a CropArray object.
+
+This function uses ``xarray.open_dataset`` and is suitable for CropArrays
+stored in NetCDF or other formats supported by xarray. For large or
+chunked datasets, consider using :func:`open_croparray_zarr`.
+
+Parameters
+----------
+path : str
+    Path to a dataset readable by ``xarray.open_dataset`` (e.g. NetCDF).
+as_object : bool, default True
+    If True, return a ``CropArray`` wrapper providing the method-style API
+    (e.g. ``ca.best_z_proj()``, ``ca.measure_signal()``).
+    If False, return the raw ``xarray.Dataset``.
+**kwargs
+    Additional keyword arguments passed directly to
+    ``xarray.open_dataset`` (e.g. ``engine``, ``chunks``).
+
+Returns
+-------
+CropArray or xarray.Dataset
+    If ``as_object=True``, returns a ``CropArray`` wrapping the opened
+    dataset. Otherwise, returns the underlying ``xarray.Dataset``.
+
+Notes
+-----
+Datasets opened with ``open_croparray`` may be loaded eagerly or lazily
+depending on the file format and the arguments passed to
+``xarray.open_dataset``.
+
+Examples
+--------
+Open a CropArray from a NetCDF file and compute best-z projections::
+
+    from croparray import open_croparray
+
+    ca = open_croparray("my_croparray.nc")
+    ca.best_z_proj()
+    ca.measure_signal()
+
+Open the raw Dataset without wrapping::
+
+    ds = open_croparray("my_croparray.nc", as_object=False)"""
+        return _impl_CropArrayIO_open_croparray(path, as_object=as_object, load_manual_filters=load_manual_filters, **kwargs)
+
+    def open_croparray_zarr(self, store, as_object=True, **kwargs):
+        """Open a saved CropArray stored in Zarr format and optionally wrap it as a
+CropArray object.
+
+This function mirrors :func:`open_croparray`, but uses
+``xarray.open_zarr`` instead of ``xarray.open_dataset``. It is intended
+for large crop arrays that benefit from chunked, lazy loading.
+
+Parameters
+----------
+store : str
+    Path to the Zarr store (directory or consolidated Zarr archive).
+as_object : bool, default True
+    If True, return a ``CropArray`` wrapper providing the method-style API
+    (e.g. ``ca.best_z_proj()``, ``ca.measure_signal()``).
+    If False, return the raw ``xarray.Dataset``.
+**kwargs
+    Additional keyword arguments passed directly to
+    ``xarray.open_zarr`` (e.g. ``consolidated=True``).
+
+Returns
+-------
+CropArray or xarray.Dataset
+    If ``as_object=True``, returns a ``CropArray`` wrapping the opened
+    dataset. Otherwise, returns the underlying ``xarray.Dataset``.
+
+Notes
+-----
+Zarr-backed CropArrays are loaded lazily; data are read from disk only
+when required for computation. This makes Zarr the preferred storage
+format for large or multi-FOV crop arrays.
+
+Examples
+--------
+Open a Zarr-backed CropArray and compute best-z projections::
+
+    from croparray import open_croparray_zarr
+
+    ca = open_croparray_zarr("my_croparray.zarr")
+    ca.best_z_proj()
+    ca.measure_signal()
+
+Open the raw Dataset without wrapping::
+
+    ds = open_croparray_zarr("my_croparray.zarr", as_object=False)"""
+        return _impl_CropArrayIO_open_croparray_zarr(store, as_object=as_object, **kwargs)
+
+
+CropArrayIO.open_as_trackarray.__doc__ = _impl_CropArrayIO_open_as_trackarray.__doc__
+CropArrayIO.open_as_trackarray.__wrapped__ = _impl_CropArrayIO_open_as_trackarray
+CropArrayIO.open_as_trackarray.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayIO_open_as_trackarray).parameters.values()))
+CropArrayIO.open_croparray.__doc__ = _impl_CropArrayIO_open_croparray.__doc__
+CropArrayIO.open_croparray.__wrapped__ = _impl_CropArrayIO_open_croparray
+CropArrayIO.open_croparray.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayIO_open_croparray).parameters.values()))
+CropArrayIO.open_croparray_zarr.__doc__ = _impl_CropArrayIO_open_croparray_zarr.__doc__
+CropArrayIO.open_croparray_zarr.__wrapped__ = _impl_CropArrayIO_open_croparray_zarr
+CropArrayIO.open_croparray_zarr.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayIO_open_croparray_zarr).parameters.values()))
 
 
 from croparray.trackarray.plot import plot_trackarray_crops as _impl_TrackArrayPlot_plot_trackarray_crops
@@ -612,19 +1364,182 @@ TrackArrayDF.track_signals_to_df.__wrapped__ = _impl_TrackArrayDF_track_signals_
 TrackArrayDF.track_signals_to_df.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayDF_track_signals_to_df).parameters.values())[1:])
 
 
+from croparray.crop_ops.apply import apply_crop_op as _impl_TrackArrayOps_apply_crop_op
+from croparray.crop_ops.apply import apply_crop_op_legacy as _impl_TrackArrayOps_apply_crop_op_legacy
+
+@dataclass
+class TrackArrayOps(_BaseAccessor):
+    """Generated accessor methods."""
+    def apply_crop_op(self, func, source='best_z', group_dims=None, group_exclude_dims=('track_id', 't', 'ch', 'x', 'y', 'z'), channels=None, channel_dim='ch', input_core_dims=('x', 'y'), output_core_dims=('x', 'y'), out_name='ch{ch}_op', func_kwargs=None, compute_sum_xy=False, sum_name='{out}_sig', sum_dims=('x', 'y'), add_to_ds=True):
+        """Apply a per-crop image operation, automatically grouping over non-core dims.
+
+Default behavior:
+  - Slices ds over all dims except group_exclude_dims (e.g. fov/exp/cell/rep)
+  - Runs the legacy vectorized implementation on each slice (drop=True)
+  - Concats slices back
+
+This preserves the *exact* semantics of apply_crop_op_legacy within each slice,
+which is critical for quantile/threshold based operations.
+
+Power users: call apply_crop_op_legacy(...) directly to bypass grouping."""
+        return _impl_TrackArrayOps_apply_crop_op(self.ds, func, source, group_dims=group_dims, group_exclude_dims=group_exclude_dims, channels=channels, channel_dim=channel_dim, input_core_dims=input_core_dims, output_core_dims=output_core_dims, out_name=out_name, func_kwargs=func_kwargs, compute_sum_xy=compute_sum_xy, sum_name=sum_name, sum_dims=sum_dims, add_to_ds=add_to_ds)
+
+    def apply_crop_op_legacy(self, func, source='best_z', channels=None, channel_dim='ch', input_core_dims=('x', 'y'), output_core_dims=('x', 'y'), out_name='ch{ch}_op', func_kwargs=None, compute_sum_xy=False, sum_name='{out}_sig', sum_dims=('x', 'y'), add_to_ds=True):
+        """Apply a per-crop image operation across a crop dataset using `xr.apply_ufunc`,
+optionally iterating over channels, and optionally computing a per-crop scalar
+summary (e.g., summed signal).
+
+Conceptually, this function executes the “known-good” pattern:
+
+    xr.apply_ufunc(
+        func,
+        da.sel(ch=<one channel>),
+        input_core_dims=[["x", "y"]],
+        output_core_dims=[["x", "y"]],
+        kwargs=...,
+        vectorize=True,
+    )
+
+and does so for every crop (and for each requested channel, if present).
+
+Parameters
+----------
+ds
+    The dataset containing crop data variables (e.g., a stack of crops across time/track/crop_id).
+func
+    A function to apply to each crop. It must accept an array-like input matching
+    `input_core_dims` (typically a 2D image) and return an array-like output matching
+    `output_core_dims`. Additional keyword arguments may be provided via `func_kwargs`.
+
+    Typical examples: spot detection / QC, filtering, background subtraction, etc.
+source
+    Either the name of a DataArray in `ds` (default: `"best_z"`) or an explicit
+    `xr.DataArray` to process.
+channels
+    Channel selection behavior when `channel_dim` exists in the source DataArray:
+
+    - `None` (default): process **all** channels present in `da.coords[channel_dim]`.
+    - `int`: process only that channel (e.g., `channels=0`).
+    - `Sequence[int]`: process only those channels (e.g., `channels=[0]` or `[0, 1]`).
+
+    If the source DataArray does **not** contain `channel_dim`, this argument is ignored
+    and the operation is applied once (i.e., “single-channel” mode).
+channel_dim
+    Name of the channel dimension in the source DataArray (default: `"ch"`).
+input_core_dims
+    Core dimensions consumed by `func` (default: `("x", "y")`). These are passed to
+    `xr.apply_ufunc(..., input_core_dims=[...])`.
+output_core_dims
+    Core dimensions produced by `func` (default: `("x", "y")`). These are passed to
+    `xr.apply_ufunc(..., output_core_dims=[...])`.
+out_name
+    Output variable name template. If channel iteration is used, `{ch}` is formatted
+    with the channel index (e.g., `"ch0_spots"`). If no channel dimension exists,
+    `{ch}` is formatted as `"NA"` by default.
+func_kwargs
+    Optional keyword arguments forwarded to `func`. If `None`, treated as `{}`.
+compute_sum_xy
+    If True, compute an additional summary signal per crop by summing `out` over
+    `sum_dims` and store it as a second output variable.
+sum_name
+    Name template for the summed-signal output, formatted with `{out}` set to the
+    generated `out_name` (default: `"{out}_sig"`).
+sum_dims
+    Dimensions to sum over when `compute_sum_xy=True` (default: `("x", "y")`).
+    Use this to control whether you sum only spatial dims, or include others.
+add_to_ds
+    If True (default), add outputs back into `ds` and return the updated dataset.
+    If False, return a dict mapping output variable names to DataArrays.
+
+Returns
+-------
+xr.Dataset or Dict[str, xr.DataArray]
+    - If `add_to_ds=True`: the input dataset `ds`, augmented with new variables.
+    - If `add_to_ds=False`: a dict of created outputs (and optional summaries).
+
+Notes
+-----
+- This function relies on `vectorize=True` in `xr.apply_ufunc`, meaning `func` is
+  applied independently across non-core dimensions (crop index, time, track_id, etc.).
+- Channel handling is done via `da.sel({channel_dim: ch})` per channel.
+- If you request channels that are not present in the DataArray coordinates,
+  a clear `ValueError` is raised.
+
+Examples
+--------
+Process all channels in `best_z`:
+
+    ds = apply_crop_op(ds, spot_detect_and_qc, source="best_z",
+                       out_name="ch{ch}_spots",
+                       func_kwargs={"minmass": 150, "size": 3})
+
+Process only channel 0:
+
+    ds = apply_crop_op(ds, spot_detect_and_qc, source="best_z",
+                       channels=[0],
+                       out_name="ch{ch}_spots",
+                       func_kwargs={"minmass": 150, "size": 3})
+
+Process channels 0 and 1 and also compute summed signal per crop:
+
+    ds = apply_crop_op(ds, spot_detect_and_qc, source="best_z",
+                       channels=[0, 1],
+                       out_name="ch{ch}_spots",
+                       func_kwargs={"minmass": 150, "size": 3},
+                       compute_sum_xy=True,
+                       sum_name="{out}_sig")"""
+        return _impl_TrackArrayOps_apply_crop_op_legacy(self.ds, func, source, channels=channels, channel_dim=channel_dim, input_core_dims=input_core_dims, output_core_dims=output_core_dims, out_name=out_name, func_kwargs=func_kwargs, compute_sum_xy=compute_sum_xy, sum_name=sum_name, sum_dims=sum_dims, add_to_ds=add_to_ds)
+
+
+TrackArrayOps.apply_crop_op.__doc__ = _impl_TrackArrayOps_apply_crop_op.__doc__
+TrackArrayOps.apply_crop_op.__wrapped__ = _impl_TrackArrayOps_apply_crop_op
+TrackArrayOps.apply_crop_op.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayOps_apply_crop_op).parameters.values())[1:])
+TrackArrayOps.apply_crop_op_legacy.__doc__ = _impl_TrackArrayOps_apply_crop_op_legacy.__doc__
+TrackArrayOps.apply_crop_op_legacy.__wrapped__ = _impl_TrackArrayOps_apply_crop_op_legacy
+TrackArrayOps.apply_crop_op_legacy.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayOps_apply_crop_op_legacy).parameters.values())[1:])
+
+
+from croparray.trackarray.napari_view import display_cell_and_tracks as _impl_TrackArrayNapari_display_cell_and_tracks
+
+@dataclass
+class TrackArrayNapari(_BaseAccessor):
+    """Generated accessor methods."""
+    def display_cell_and_tracks(self, tracks_df):
+        """Display the maximum intensity projection of the images and the tracks in Napari.
+
+Parameters:
+img_croparray (numpy.ndarray): Array containing image data with dimensions (fov, t, z, x, y, ch).
+tracks_df (pandas.DataFrame): DataFrame containing track information.
+
+Returns:
+napari.Viewer: The viewer instance with the images and tracks added."""
+        return _impl_TrackArrayNapari_display_cell_and_tracks(self.ds, tracks_df)
+
+
+TrackArrayNapari.display_cell_and_tracks.__doc__ = _impl_TrackArrayNapari_display_cell_and_tracks.__doc__
+TrackArrayNapari.display_cell_and_tracks.__wrapped__ = _impl_TrackArrayNapari_display_cell_and_tracks
+TrackArrayNapari.display_cell_and_tracks.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayNapari_display_cell_and_tracks).parameters.values())[1:])
+
 
 
 def install_generated_accessors(CropArray, TrackArray):
     """Attach generated accessors as @property on wrapper classes."""
     # CropArray accessors
-    CropArray.plot    = property(lambda self, _A=CropArrayPlot: _A(self))
+    CropArray.plot = property(lambda self, _A=CropArrayPlot: _A(self))
     CropArray.measure = property(lambda self, _A=CropArrayMeasure: _A(self))
-    CropArray.view    = property(lambda self, _A=CropArrayView: _A(self))
-    CropArray.df      = property(lambda self, _A=CropArrayDF: _A(self))
-    CropArray.track   = property(lambda self, _A=CropArrayTrack: _A(self))
+    CropArray.df = property(lambda self, _A=CropArrayDF: _A(self))
+    CropArray.view = property(lambda self, _A=CropArrayView: _A(self))
+    CropArray.track = property(lambda self, _A=CropArrayTrack: _A(self))
+    CropArray.ops = property(lambda self, _A=CropArrayOps: _A(self))
+    CropArray.napari = property(lambda self, _A=CropArrayNapari: _A(self))
+    CropArray.build = property(lambda self, _A=CropArrayBuild: _A(self))
+    CropArray.io = property(lambda self, _A=CropArrayIO: _A(self))
 
     # TrackArray accessors
-    TrackArray.tplot    = property(lambda self, _A=TrackArrayPlot: _A(self))
+    TrackArray.tplot = property(lambda self, _A=TrackArrayPlot: _A(self))
     TrackArray.tmeasure = property(lambda self, _A=TrackArrayMeasure: _A(self))
-    TrackArray.tview    = property(lambda self, _A=TrackArrayView: _A(self))
-    TrackArray.tdf      = property(lambda self, _A=TrackArrayDF: _A(self))
+    TrackArray.tview = property(lambda self, _A=TrackArrayView: _A(self))
+    TrackArray.tdf = property(lambda self, _A=TrackArrayDF: _A(self))
+    TrackArray.ops = property(lambda self, _A=TrackArrayOps: _A(self))
+    TrackArray.napari = property(lambda self, _A=TrackArrayNapari: _A(self))
+
