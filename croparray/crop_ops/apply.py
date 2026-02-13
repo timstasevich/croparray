@@ -1,11 +1,13 @@
 from typing import Any, Callable, Dict, Optional, Sequence, Union, Iterable, List
 import xarray as xr
 import itertools
-
+from functools import wraps
 
 __all__ = [
     "apply_crop_op",          # NEW default (grouped wrapper)
     "apply_crop_op_legacy",   # old behavior (power users)
+    "apply",                  # alias for apply_crop_op
+    "apply_legacy",            # alias for apply_legacy
 ]
 
 def _infer_group_dims(
@@ -18,7 +20,6 @@ def _infer_group_dims(
     if group_dims is not None:
         return [d for d in group_dims if d in da.dims]
     return [d for d in da.dims if d not in set(group_exclude_dims)]
-
 
 def apply_crop_op(
     ds: xr.Dataset,
@@ -127,7 +128,6 @@ def apply_crop_op(
     # If user asked for dict outputs, mimic legacy: return created vars only
     created = {k: merged[k] for k in merged.data_vars if k not in ds.data_vars}    
     return created
-
 
 def apply_crop_op_legacy(
     ds: xr.Dataset,
@@ -319,3 +319,11 @@ def apply_crop_op_legacy(
         return ds
 
     return created
+
+@wraps(apply_crop_op)
+def apply(ds, *args, **kwargs):
+    return apply_crop_op(ds, *args, **kwargs)
+
+@wraps(apply_crop_op_legacy)
+def apply_legacy(ds, *args, **kwargs):
+    return apply_crop_op_legacy(ds, *args, **kwargs)

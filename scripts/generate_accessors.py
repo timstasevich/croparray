@@ -3,52 +3,66 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 OUT_PATH = Path("croparray/_accessors_generated.py")
+
 
 # --- Optional dependency stubs (generation should not require heavy GUI deps) ---
 def _ensure_stub(name: str) -> None:
     try:
         importlib.import_module(name)
     except Exception:
-        import sys, types
+        import sys
+        import types
+
         sys.modules[name] = types.ModuleType(name)
 
-_ensure_stub('napari')
+
+_ensure_stub("napari")
+
 
 def _ensure_magicgui_qtpy_stubs() -> None:
-    import sys, types
+    import sys
+    import types
+
     # magicgui.widgets
-    if 'magicgui' not in sys.modules:
-        sys.modules['magicgui'] = types.ModuleType('magicgui')
-    if 'magicgui.widgets' not in sys.modules:
-        widgets = types.ModuleType('magicgui.widgets')
+    if "magicgui" not in sys.modules:
+        sys.modules["magicgui"] = types.ModuleType("magicgui")
+    if "magicgui.widgets" not in sys.modules:
+        widgets = types.ModuleType("magicgui.widgets")
         # Define dummy widget classes used at import-time
-        for _name in ['Container','ComboBox','FileEdit','Label','PushButton','CheckBox']:
+        for _name in ["Container", "ComboBox", "FileEdit", "Label", "PushButton", "CheckBox"]:
             setattr(widgets, _name, type(_name, (), {}))
-        sys.modules['magicgui.widgets'] = widgets
-        setattr(sys.modules['magicgui'], 'widgets', widgets)
+        sys.modules["magicgui.widgets"] = widgets
+        setattr(sys.modules["magicgui"], "widgets", widgets)
 
     # qtpy.QtWidgets
-    if 'qtpy' not in sys.modules:
-        sys.modules['qtpy'] = types.ModuleType('qtpy')
-    if 'qtpy.QtWidgets' not in sys.modules:
-        qtwidgets = types.ModuleType('qtpy.QtWidgets')
-        setattr(qtwidgets, 'QApplication', type('QApplication', (), {}))
-        sys.modules['qtpy.QtWidgets'] = qtwidgets
-        setattr(sys.modules['qtpy'], 'QtWidgets', qtwidgets)
+    if "qtpy" not in sys.modules:
+        sys.modules["qtpy"] = types.ModuleType("qtpy")
+    if "qtpy.QtWidgets" not in sys.modules:
+        qtwidgets = types.ModuleType("qtpy.QtWidgets")
+        setattr(qtwidgets, "QApplication", type("QApplication", (), {}))
+        sys.modules["qtpy.QtWidgets"] = qtwidgets
+        setattr(sys.modules["qtpy"], "QtWidgets", qtwidgets)
+
 
 _ensure_magicgui_qtpy_stubs()
 
 
 class AccessorSpec(NamedTuple):
+    """Spec for generating an accessor class.
+
+    modules: ordered list/tuple of module names.
+      - earlier modules act as "base"
+      - later modules override functions of the same name
+    """
+
     # Name of the generated accessor class
     cls_name: str
-    # Module containing functions to expose (via __all__ if present, else public callables)
-    module: str
+    # Modules containing functions to expose (via __all__ if present, else public callables)
+    modules: tuple[str, ...]
     # Whether accessor injects self.ds as the first argument
     bind_ds: bool
     # Which wrapper class to install on: "CropArray" or "TrackArray"
@@ -58,33 +72,64 @@ class AccessorSpec(NamedTuple):
 
 
 # ---- Configure accessor coverage here ----
-# Add a module to this list and it will be generated automatically.
 # Within each module, add functions to __all__ (recommended). If __all__ is absent,
 # we fall back to exporting all public callables defined in that module.
 ACCESSOR_SPECS: list[AccessorSpec] = [
     # CropArray: ds-first (bind_ds=True)
-    AccessorSpec("CropArrayPlot", "croparray.plot", True, "CropArray", "plot"),
-    AccessorSpec("CropArrayMeasure", "croparray.measure", True, "CropArray", "measure"),
-    AccessorSpec("CropArrayDF", "croparray.dataframe", True, "CropArray", "df"),
-    AccessorSpec("CropArrayView", "croparray.napari_view", True, "CropArray", "view"),
-    AccessorSpec("CropArrayTrack", "croparray.tracking", True, "CropArray", "track"),
-    AccessorSpec("CropArrayOps", "croparray.crop_ops.apply", True, "CropArray", "ops"),
-    AccessorSpec("CropArrayNapari", "croparray.napari_view", True, "CropArray", "napari"),
+    AccessorSpec("CropArrayPlot", ("croparray.plot",), True, "CropArray", "plot"),
+    AccessorSpec("CropArrayMeasure", ("croparray.measure",), True, "CropArray", "measure"),
+    AccessorSpec("CropArrayDF", ("croparray.dataframe",), True, "CropArray", "df"),
+    AccessorSpec("CropArrayView", ("croparray.napari_view",), True, "CropArray", "view"),
+    AccessorSpec("CropArrayTrack", ("croparray.tracking",), True, "CropArray", "track"),
+    AccessorSpec("CropArrayOps", ("croparray.crop_ops.apply",), True, "CropArray", "ops"),
+    AccessorSpec("CropArrayNapari", ("croparray.napari_view",), True, "CropArray", "napari"),
 
     # CropArray: non-ds-first (bind_ds=False)
-    AccessorSpec("CropArrayBuild", "croparray.build", False, "CropArray", "build"),
-    AccessorSpec("CropArrayIO", "croparray.io", False, "CropArray", "io"),
+    AccessorSpec("CropArrayBuild", ("croparray.build",), False, "CropArray", "build"),
+    AccessorSpec("CropArrayIO", ("croparray.io",), False, "CropArray", "io"),
 
     # TrackArray: ds-first (bind_ds=True)
-    AccessorSpec("TrackArrayPlot", "croparray.trackarray.plot", True, "TrackArray", "tplot"),
-    AccessorSpec("TrackArrayMeasure", "croparray.trackarray.measure", True, "TrackArray", "tmeasure"),
-    AccessorSpec("TrackArrayView", "croparray.trackarray.napari_view", True, "TrackArray", "tview"),
-    AccessorSpec("TrackArrayDF", "croparray.trackarray.dataframe", True, "TrackArray", "tdf"),
-    AccessorSpec("TrackArrayOps", "croparray.crop_ops.apply", True, "TrackArray", "ops"),
-    AccessorSpec("TrackArrayNapari", "croparray.trackarray.napari_view", True, "TrackArray", "napari"),
+    # TrackArray accessors inherit CropArray APIs by default, and allow trackarray modules
+    # to add/override behavior.
+    AccessorSpec(
+        "TrackArrayPlot",
+        ("croparray.plot", "croparray.trackarray.plot"),
+        True,
+        "TrackArray",
+        "tplot",
+    ),
+    AccessorSpec(
+        "TrackArrayMeasure",
+        ("croparray.measure", "croparray.trackarray.measure"),
+        True,
+        "TrackArray",
+        "tmeasure",
+    ),
+    AccessorSpec(
+        "TrackArrayView",
+        ("croparray.napari_view", "croparray.trackarray.napari_view"),
+        True,
+        "TrackArray",
+        "tview",
+    ),
+    AccessorSpec(
+        "TrackArrayDF",
+        ("croparray.dataframe", "croparray.trackarray.dataframe"),
+        True,
+        "TrackArray",
+        "tdf",
+    ),
+    AccessorSpec("TrackArrayOps", ("croparray.crop_ops.apply",), True, "TrackArray", "ops"),
+    AccessorSpec(
+        "TrackArrayNapari",
+        ("croparray.napari_view", "croparray.trackarray.napari_view"),
+        True,
+        "TrackArray",
+        "napari",
+    ),
 
     # TrackArray: non-ds-first (bind_ds=False) — add when you have a stable API
-    # AccessorSpec("TrackArrayBuild", "croparray.trackarray.build", False, "TrackArray", "build"),
+    # AccessorSpec("TrackArrayBuild", ("croparray.build", "croparray.trackarray.build"), False, "TrackArray", "build"),
 ]
 
 
@@ -139,12 +184,15 @@ def _build_forward_args(params: list[inspect.Parameter]) -> str:
 
 
 def _exported_function_names(module) -> list[str]:
-    # Prefer __all__ if present.
+    """Return exported names for a module.
+
+    Prefer __all__ if present. If __all__ is absent/empty, export public callables
+    defined in that module.
+    """
     names = list(getattr(module, "__all__", []))
     if names:
         return names
 
-    # Fallback: public callables defined in that module.
     out: list[str] = []
     for name, obj in module.__dict__.items():
         if name.startswith("_"):
@@ -152,6 +200,41 @@ def _exported_function_names(module) -> list[str]:
         if callable(obj) and getattr(obj, "__module__", None) == module.__name__:
             out.append(name)
     return sorted(out)
+
+
+def _merged_functions(modnames: tuple[str, ...]) -> tuple[list[str], dict[str, tuple[str, Any]]]:
+    """Merge exported callables across modules.
+
+    Returns:
+      ordered_names: unique function names in first-seen order across modules
+      winners: mapping fn_name -> (winning_module_name, function_object)
+
+    Later modules override earlier ones for the same function name.
+    """
+    if not modnames:
+        return [], {}
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    winners: dict[str, tuple[str, Any]] = {}
+
+    for modname in modnames:
+        module = importlib.import_module(modname)
+        names = _exported_function_names(module)
+
+        # preserve first-seen order
+        for fn in names:
+            if fn not in seen:
+                seen.add(fn)
+                ordered.append(fn)
+
+        # update winners (later modules override)
+        for fn in names:
+            if not hasattr(module, fn):
+                raise AttributeError(f"{modname} has no attribute {fn!r} (exported)")
+            winners[fn] = (modname, getattr(module, fn))
+
+    return ordered, winners
 
 
 def generate() -> None:
@@ -177,14 +260,12 @@ def generate() -> None:
 
     # Generate each accessor class
     for spec in ACCESSOR_SPECS:
-        module = importlib.import_module(spec.module)
-        func_names = _exported_function_names(module)
+        func_names, winners = _merged_functions(spec.modules)
 
-        # Import impl functions as private names
+        # Import winning impl functions as private names
         for fn in func_names:
-            if not hasattr(module, fn):
-                raise AttributeError(f"{spec.module} has no attribute {fn!r} (exported)")
-            lines.append(f"from {spec.module} import {fn} as _impl_{spec.cls_name}_{fn}")
+            modname, _func = winners[fn]
+            lines.append(f"from {modname} import {fn} as _impl_{spec.cls_name}_{fn}")
         if func_names:
             lines.append("")
 
@@ -195,7 +276,7 @@ def generate() -> None:
         doc_assignments: list[str] = []
         for fn in func_names:
             impl_name = f"_impl_{spec.cls_name}_{fn}"
-            func = getattr(module, fn)
+            _modname, func = winners[fn]
 
             if spec.bind_ds:
                 sig_str, params = _sig_without_first_arg(func)
@@ -227,14 +308,14 @@ def generate() -> None:
 
             if spec.bind_ds:
                 doc_assignments.append(
-                    f"{spec.cls_name}.{fn}.__signature__ = inspect.Signature("
+                    f"{spec.cls_name}.{fn}.__signature__ = inspect.Signature("  # noqa: E501
                     f"parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + "
-                    f"list(inspect.signature({impl_name}).parameters.values())[1:]"
+                    f"list(inspect.signature({impl_name}).parameters.values())[1:]"  # drop ds
                     f")"
                 )
             else:
                 doc_assignments.append(
-                    f"{spec.cls_name}.{fn}.__signature__ = inspect.Signature("
+                    f"{spec.cls_name}.{fn}.__signature__ = inspect.Signature("  # noqa: E501
                     f"parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + "
                     f"list(inspect.signature({impl_name}).parameters.values())"
                     f")"

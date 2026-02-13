@@ -36,7 +36,6 @@ class CropArray:
     _napari: "CropArrayNapari" = field(init=False, repr=False)
 
 
-
     def __post_init__(self):
         """
         Attach namespaced accessors (io/build/measure/plot/view/df/track)
@@ -102,16 +101,75 @@ class CropArray:
     @property
     def napari(self):
         return self._napari
+    
+    @property
+    def xy_pad(self) -> int:
+        if "xy_pad" in self.ds.attrs:
+            return int(self.ds.attrs["xy_pad"])
+        if "xy_pad" in self.ds:  # old files
+            return int(self.ds["xy_pad"].item())
+        raise AttributeError("xy_pad not found")
+    
+    @property
+    def dx(self) -> float:
+        if "dx" in self.ds.attrs:
+            return float(self.ds.attrs["dx"])
+        if "dx" in self.ds:  # old files
+            return float(self.ds["dx"].item())
+        raise AttributeError("dx not found")
+
+    @property
+    def dy(self) -> float:
+        if "dy" in self.ds.attrs:
+            return float(self.ds.attrs["dy"])
+        if "dy" in self.ds:  # old files
+            return float(self.ds["dy"].item())
+        raise AttributeError("dy not found")
+
+    @property
+    def dz(self) -> float:
+        if "dz" in self.ds.attrs:
+            return float(self.ds.attrs["dz"])
+        if "dz" in self.ds:  # old files
+            return float(self.ds["dz"].item())
+        raise AttributeError("dz not found")
+
+    @property
+    def dt(self) -> float:
+        if "dt" in self.ds.attrs:
+            return float(self.ds.attrs["dt"])
+        if "dt" in self.ds:  # old files
+            return float(self.ds["dt"].item())
+        raise AttributeError("dt not found")
+        
+    @property
+    def units(self):
+        if "units" in self.ds.attrs:
+            return self.ds.attrs["units"]
+        if "units" in self.ds:  # old files
+            return self.ds["units"].item()
+        raise AttributeError("units not found")
+        
+    @property
+    def signal_units(self) -> str:
+        return str(self.ds.attrs.get("signal_units", "a.u."))
+
+    @property
+    def xyz_units(self) -> str:
+        return str(self.ds.attrs.get("xyz_units", "space"))
+
+    @property
+    def t_units(self) -> str:
+        return str(self.ds.attrs.get("t_units", "time"))
+
 
     def __setitem__(self, key: str, value):
         self.ds[key] = value
-
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(self.ds, name)
-
 
     def to_xarray(self):
         """Return the underlying xarray.Dataset."""

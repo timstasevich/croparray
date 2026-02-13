@@ -907,17 +907,12 @@ def _create_crop_array_dataset(video, df, **kwargs):
     # -------------------------
     # dataset variables
     # -------------------------
-    dx = xr.DataArray(my_dx, coords=[], dims=[], attrs={"units": units[0], "long_name": "x-resolution"})
-    dy = xr.DataArray(my_dy, coords=[], dims=[], attrs={"units": units[0], "long_name": "y-resolution"})
-    dz = xr.DataArray(my_dz, coords=[], dims=[], attrs={"units": units[0], "long_name": "z-resolution"})
-    dt = xr.DataArray(my_dt, coords=[], dims=[], attrs={"units": units[1], "long_name": "temporal resolution"})
-    xy_pad_da = xr.DataArray(xy_pad, coords=[], dims=[], attrs={"units": "pixels"})
-
+    signal_units = str(kwargs.get("signal_units", "a.u."))
     intensity = xr.DataArray(
         my_crops_all,
         coords=[fov, n, t, z, y, x, ch],
         dims=["fov", "n", "t", "z", "y", "x", "ch"],
-        attrs={"units": "intensity (a.u.)", "long_name": "intensity"},
+        attrs={"units": signal_units, "long_name": "intensity (a.u.)"},
     )
 
     xc = xr.DataArray(my_xc_all, coords=[fov, n, t, ch], dims=["fov", "n", "t", "ch"],
@@ -973,12 +968,42 @@ def _create_crop_array_dataset(video, df, **kwargs):
             "xc_pix": xc_pix, "yc_pix": yc_pix, "zc_pix": zc_pix,
             "xc_pad": xc_pad, "yc_pad": yc_pad,
             "z_pos": z_pos,
-            "dx": dx, "dy": dy, "dz": dz, "dt": dt,
-            "xy_pad": xy_pad_da,
             **scalar_dict,
             **ch_dict,
         },
-        attrs={"name": name, "date": date},
+        attrs={"name": str(name), "date": str(date)},
+    )
+    # define unit strings once (plain python str)
+    xyz_units = str(units[0]) if units and len(units) > 0 else "space"
+    t_units   = str(units[1]) if units and len(units) > 1 else "time"
+    signal_units = str(kwargs.get("signal_units", "a.u."))
+
+    ds = xr.Dataset(
+        {
+            "int": intensity,
+            "xc": xc, "yc": yc, "zc": zc,
+            "xc_pix": xc_pix, "yc_pix": yc_pix, "zc_pix": zc_pix,
+            "xc_pad": xc_pad, "yc_pad": yc_pad,
+            "z_pos": z_pos,
+            **scalar_dict,
+            **ch_dict,
+        },
+        attrs={"name": str(name), "date": str(date)},
+    )
+
+    ds.attrs.update(
+        {
+            "xy_pad": int(xy_pad),
+            "z_pad": int(z_pad),
+            "dx": float(my_dx),
+            "dy": float(my_dy),
+            "dz": float(my_dz),
+            "dt": float(my_dt),
+            "xyz_units": xyz_units,
+            "t_units": t_units,
+            "signal_units": signal_units,
+            "croparray_schema_version": "2.0",
+        }
     )
 
     return ds
@@ -1074,6 +1099,8 @@ def make_croparrays(
     from pathlib import Path
     from tifffile import imread
     import pandas as pd
+    import numpy as np
+    import xarray as xr
 
     # tqdm is optional
     try:
@@ -1082,15 +1109,67 @@ def make_croparrays(
         tqdm = None
 
     def _as_list(x):
-        if isinstance(x, (str, Path, pd.DataFrame)) or hasattr(x, "shape"):
+        """Treat strings/Paths/DataFrames/ndarrays as singletons; otherwise assume iterable."""
+        if isinstance(x, (str, Path, pd.DataFrame, np.ndarray)) or hasattr(x, "shape"):
             return [x]
         return list(x)
+
+    def _normalize_attrs_for_netcdf(ds: xr.Dataset) -> xr.Dataset:
+        """
+        Make ds.attrs safe for NetCDF writers (especially SciPy/NetCDF3):
+        - convert numpy scalars/arrays to python scalars/lists
+        - ensure strings are plain Python str
+        """
+        def norm(v):
+            if isinstance(v, np.generic):
+                v = v.item()
+            if isinstance(v, np.ndarray):
+                v = v.tolist()
+            if isinstance(v, (list, tuple)):
+                return [norm(x) for x in v]
+            if isinstance(v, (bytes, bytearray)):
+                return v.decode("utf-8", errors="replace")
+            if isinstance(v, np.str_):
+                return str(v)
+            if isinstance(v, Path):
+                return str(v)
+            return v
+
+        ds = ds.copy()
+        ds.attrs = {str(k): norm(v) for k, v in ds.attrs.items()}
+        return ds
+
+    def _atomic_to_netcdf(ds: xr.Dataset, out_file: Path) -> None:
+        """
+        Atomic write: write to temp then replace.
+        Prevents 0-byte / truncated files when something fails mid-write.
+        """
+        tmp = out_file.with_suffix(out_file.suffix + ".tmp")
+
+        # If a previous tmp exists, remove it
+        if tmp.exists():
+            tmp.unlink()
+
+        try:
+            ds.to_netcdf(tmp, mode="w")  # let xarray pick best available engine
+            # Replace atomically
+            tmp.replace(out_file)
+        except Exception:
+            # Clean up partial tmp
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except Exception:
+                    pass
+            raise
 
     video_list = _as_list(videos)
     spots_list = _as_list(spots)
 
     if len(video_list) != len(spots_list):
-        raise ValueError(f"videos and spots must have the same length; got {len(video_list)} vs {len(spots_list)}")
+        raise ValueError(
+            f"videos and spots must have the same length; got {len(video_list)} vs {len(spots_list)}"
+        )
 
     out_path_dir = Path(out_dir) if out_dir is not None else None
     if out_path_dir is not None:
@@ -1103,7 +1182,6 @@ def make_croparrays(
         axes_result = _gui.define_video_axes(path=video_list[axes_source_index])
         axes_use = axes_result.axes
 
-    # Progress iterator
     it = enumerate(zip(video_list, spots_list))
     if progress and tqdm is not None:
         it = tqdm(it, total=len(video_list), desc="croparray", unit="file")
@@ -1112,7 +1190,6 @@ def make_croparrays(
     written_paths = []
 
     for fov_index, (vf, sf) in it:
-        # Determine output path (only if writing)
         out_file = None
         if out_path_dir is not None:
             vf_path = Path(vf) if isinstance(vf, (str, Path)) else None
@@ -1121,18 +1198,16 @@ def make_croparrays(
 
             if out_file.exists():
                 if skip_existing:
-                    # safe reruns: skip
                     continue
-                # never overwrite
                 raise FileExistsError(f"{out_file} exists. Croparray will not overwrite existing files.")
 
         # Load video
         video_raw = imread(vf) if isinstance(vf, (str, Path)) else vf
 
-        # Standardize axes if we have them
+        # Standardize axes
         video_std = standardize_video_axes(video_raw, axes_use) if axes_use is not None else video_raw
 
-        # Standardize spots (path or df)
+        # Standardize spots
         spots_std = standardize_spots(
             sf,
             tracker=tracker,
@@ -1157,16 +1232,17 @@ def make_croparrays(
             date=date,
             as_object=as_object,
         )
-        # Always store on the underlying xarray.Dataset
-        ds = ca_data.ds if hasattr(ca_data, "ds") else ca_data
-        ds.attrs["notes"] = notes
+        results.append(ca_data)
 
-        # Write output (explicitly create/overwrite only when file does not already exist)
+        ds = ca_data.ds if hasattr(ca_data, "ds") else ca_data
+        ds.attrs["notes"] = str(notes)
+
+        ds = _normalize_attrs_for_netcdf(ds)
+
         if out_file is not None:
-            ds.to_netcdf(out_file, mode="w")
+            _atomic_to_netcdf(ds, out_file)
             written_paths.append(out_file)
 
-    # Return written paths if writing, else return objects
     if out_path_dir is not None:
         return written_paths
 

@@ -6,16 +6,6 @@ from skimage.measure import label, regionprops
 __all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props", "mask_skeleton_length"]
 
 
-import xarray as xr
-
-import numpy as np
-import xarray as xr
-
-
-import numpy as np
-import xarray as xr
-
-
 def best_z_proj(
     ca,
     ref_ch: int | None = 0,
@@ -204,69 +194,6 @@ def best_z_proj(
         _maybe_write_global_best(ca["z_pos_best"])
         return out
 
-
-
-
-# def best_z_proj(ca, **kwargs):
-#     '''
-#     Returns an x-array that holds the best-z projection of intensities of spots in a reference channel and augments ca to include a 'ca.zc' layer that holds the best-z values.
-
-#     Parameters
-#     ----------
-#     ca: crop array (x-array dataset)
-#         A crop array.
-#     ref_ch: int, optional 
-#         A reference intensity channel for finding the best-z projection. Default: ref_ch = 0. If None, best-z is calculated separately for each channel.
-#     disk_r: int, optional
-#         The radius of the disk (in pixels) to make measurements to determine the best-z slice. Default: disk_r = 1
-#     roll_num: int, optional
-#         The number of z-slices to use in the rolling-z max projection for determining the best-z slice. min_periods in the da.rolling() function is set to 1 so there will be no Nans at the z-edges of crops. Default: roll_num = 1.
-
-#     Returns
-#     ------- 
-#     A 'best-z' x-array with dimensions (fov,n,t,y,x,ch). The best-z x-array contains the intensities of each crop in the 'best' z-slice, where 'best' is defined as the slice having the maximal intensity within a centered xy disk of radius disk_r pixels. A rolling-z maximum projection (over roll_n z-slices) can optionally be performed so best-z represents a max-z projection across multiple z-slices. In addition, the inputted crop array ca is augmented to now contain a 'zc' layer that contains the best-z position of each crop. 
-#     '''
-#     # Get the optional key word arguments (kwargs):
-#     ref_ch = kwargs.get('ref_ch', 0)
-#     disk_r = kwargs.get('disk_r', 1) 
-#     roll_n = kwargs.get('roll_n', 1)
-
-#     res = ca.dx  # resolution for defining disk to make measurements to determine best-z
-
-#     # Compute best-z separately for each channel using list comprehension
-#     if ref_ch is None:
-#         z_sig = [
-#             ca.sel(ch=ch_index).int.where(lambda a: a.x**2 + a.y**2 <= (disk_r * res)**2)
-#             .mean(dim=['x', 'y'])
-#             .rolling(z=roll_n, center=True, min_periods=1)
-#             .max()
-#             for ch_index in ca.ch.values
-#         ]
-#         # Choose z-plane
-#         output = xr.concat([
-#             ca.int.isel(ch=i).rolling(z=roll_n, center=True, min_periods=1).max().isel(z=z_sig[i].argmax(dim='z'))
-#             for i in range(len(ca.ch.values))
-#         ], dim='ch')   
-        
-#         # Add/overwrite the 'zc' layer in the inputted crop-array
-#         ca['zc'] = xr.concat([z_sig[i].argmax(dim='z') for i in range(len(ca.ch.values))], dim='ch')
-#         ca.zc.attrs['units'] = 'pixels'
-#         ca.zc.attrs['long_name'] = 'crop center z for each channel'
-#     else:
-#         # Get z-signals in disk within each z-plane and apply rolling z-average of these signals
-#         z_sig = ca.sel(ch=ref_ch).int.where(lambda a: a.x**2 + a.y**2 <= (disk_r*res)**2).mean(dim=['x','y']).rolling(z=roll_n, center=True, min_periods=1).max()
-
-#         # Choose z-plane in ca.int corresponding to max z-signal for each channel, then concatenate x-arrays with coordinate channels
-#         output = xr.concat([ca.int.sel(ch=i).rolling(z=roll_n,center=True,min_periods=1).max().isel(z_sig.argmax(dim=['z'])) for i in ca.ch], dim='ch') 
-        
-#         # Add/overwrite the 'zc' layer in the inputted crop-array
-#         ca['zc'] = z_sig.argmax(dim='z')
-#         ca.zc.attrs['units']='pixels'
-#         ca.zc.attrs['long_name']='crop center z'        
-
-
-#     return output
-
 def measure_signal(
     ca,
     ref_ch=None,
@@ -345,7 +272,7 @@ def measure_signal(
     ca["best_z"].attrs["long_name"] = "best-z (rolling-z max) image, background-subtracted"
 
     ca["signal"] = signal
-    ca["signal"].attrs["units"] = "intensity (a.u.)"
+    ca["signal"].attrs["units"] = ca.attrs.get("signal_units", "")
     ca["signal"].attrs["long_name"] = "crop signal (disk mean - ring median)"
 
     if drop_int and "int" in ca:
@@ -354,7 +281,6 @@ def measure_signal(
         ca = ca.drop_vars("best_z")
 
     return ca
-
 
 def measure_signal_raw(
     ca,
@@ -425,8 +351,6 @@ def measure_signal_raw(
         ca = ca.drop_vars("best_z")
 
     return ca
-
-
 
 def mask_props(
     ca,
@@ -527,7 +451,6 @@ def mask_props(
         ca[name].attrs["long_name"] = f"{k} from {source}"
 
     return ca
-
 
 def mask_skeleton_length(
     ca,
