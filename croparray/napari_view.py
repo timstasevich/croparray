@@ -567,8 +567,10 @@ def montage_viewer(
         except Exception:
             rgba = on_color  # some napari versions accept strings directly
 
+        transparent = (0.0, 0.0, 0.0, 0.0)
         lyr.colormap = DirectLabelColormap(
             color_dict={
+                None: transparent,
                 0: (0.0, 0.0, 0.0, 0.0),  # transparent background
                 1: rgba,                  # label=1 color
             }

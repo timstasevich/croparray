@@ -1,7 +1,15 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import xarray as xr
 import itertools
+
+__all__ = [
+    # ... existing ...
+    "track_array_single, track_array"
+]
+
 
 def track_array_single(ca, as_object: bool = False):
     """
@@ -91,9 +99,6 @@ def track_array_single(ca, as_object: bool = False):
         return TrackArray(my_taz)
 
     return my_taz
-
-
-
 
 def track_array( 
     ca_in,

@@ -1182,6 +1182,8 @@ CropArrayBuild.open_measure_concat.__wrapped__ = _impl_CropArrayBuild_open_measu
 CropArrayBuild.open_measure_concat.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_open_measure_concat).parameters.values()))
 
 
+from croparray.io import save_croparray as _impl_CropArrayIO_save_croparray
+from croparray.io import open_trackarray as _impl_CropArrayIO_open_trackarray
 from croparray.io import open_as_trackarray as _impl_CropArrayIO_open_as_trackarray
 from croparray.io import open_croparray as _impl_CropArrayIO_open_croparray
 from croparray.io import open_croparray_zarr as _impl_CropArrayIO_open_croparray_zarr
@@ -1189,6 +1191,38 @@ from croparray.io import open_croparray_zarr as _impl_CropArrayIO_open_croparray
 @dataclass
 class CropArrayIO(_BaseAccessor):
     """Generated accessor methods."""
+    def save_croparray(self, obj, output_dir, filename=None, ext='.nc', overwrite=False, mkdir=True, to_netcdf_kwargs=None):
+        """Save a CropArray/TrackArray (or raw xarray.Dataset) to NetCDF.
+
+If `filename` is not provided, uses ds.attrs["name"] (slugified) as the stem.
+
+Parameters
+----------
+obj
+    CropArray, TrackArray, or xarray.Dataset. If object has `.ds`, that dataset is saved.
+output_dir
+    Directory to write into.
+filename
+    Optional filename. If None, derives from ds.attrs["name"].
+    If provided without suffix, `ext` is appended.
+ext
+    Default ".nc".
+overwrite
+    If False (default), refuse to overwrite.
+mkdir
+    If True (default), create output_dir if needed.
+to_netcdf_kwargs
+    Extra kwargs passed to `Dataset.to_netcdf`.
+
+Returns
+-------
+pathlib.Path
+    The written file path."""
+        return _impl_CropArrayIO_save_croparray(obj, output_dir=output_dir, filename=filename, ext=ext, overwrite=overwrite, mkdir=mkdir, to_netcdf_kwargs=to_netcdf_kwargs)
+
+    def open_trackarray(self, path, as_object=True, load_manual_filters=True, **kwargs):
+        return _impl_CropArrayIO_open_trackarray(path, as_object=as_object, load_manual_filters=load_manual_filters, **kwargs)
+
     def open_as_trackarray(self, path, drop_vars=('int',), drop_errors='ignore', as_object=True, **kwargs):
         """Open a CropArray dataset and immediately convert it to a TrackArray.
 
@@ -1305,6 +1339,12 @@ Open the raw Dataset without wrapping::
         return _impl_CropArrayIO_open_croparray_zarr(store, as_object=as_object, **kwargs)
 
 
+CropArrayIO.save_croparray.__doc__ = _impl_CropArrayIO_save_croparray.__doc__
+CropArrayIO.save_croparray.__wrapped__ = _impl_CropArrayIO_save_croparray
+CropArrayIO.save_croparray.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayIO_save_croparray).parameters.values()))
+CropArrayIO.open_trackarray.__doc__ = _impl_CropArrayIO_open_trackarray.__doc__
+CropArrayIO.open_trackarray.__wrapped__ = _impl_CropArrayIO_open_trackarray
+CropArrayIO.open_trackarray.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayIO_open_trackarray).parameters.values()))
 CropArrayIO.open_as_trackarray.__doc__ = _impl_CropArrayIO_open_as_trackarray.__doc__
 CropArrayIO.open_as_trackarray.__wrapped__ = _impl_CropArrayIO_open_as_trackarray
 CropArrayIO.open_as_trackarray.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayIO_open_as_trackarray).parameters.values()))

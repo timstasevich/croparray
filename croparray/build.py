@@ -8,7 +8,6 @@ import xarray as xr
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-import json
 
 __all__ = ["standardize_video_axes","standardize_spots", "create_crop_array", "make_croparrays", "open_measure_concat"]
 
@@ -1339,6 +1338,9 @@ def open_measure_concat(
         return [Path(f).stem for f in files]
 
     prov = []
+    leaf_names: list[str] = []
+    leaf_notes: list[str] = []
+
 
     def _recurse(node: Any, level: int):
         dim = dims[level]
@@ -1351,6 +1353,16 @@ def open_measure_concat(
                 ca.tools.open_as_trackarray(fn, drop_vars=drop_vars, as_object=True).measure_signal(**measure_kwargs)
                 for fn in files
             ]
+            for _ta in tas:
+                ds0 = _ta.ds
+                n0 = str(ds0.attrs.get("name", "")).strip()
+                if n0:
+                    leaf_names.append(n0)
+
+                note0 = str(ds0.attrs.get("notes", "")).strip()
+                if note0:
+                    leaf_notes.append(note0)
+
 
             leaf_labels = lvl_labels if lvl_labels is not None else _default_leaf_labels(files)
 
@@ -1388,6 +1400,7 @@ def open_measure_concat(
     ta = _recurse(groups, level=0)
 
     if attach_provenance:
+        import json 
         ta.ds.attrs["provenance_json"] = json.dumps(
             dict(
                 timestamp=datetime.now().isoformat(timespec="seconds"),
@@ -1400,6 +1413,85 @@ def open_measure_concat(
             ),
             indent=2,
         )
+
+    def _uniq_keep_order(xs: list[str]) -> list[str]:
+        seen = set()
+        out = []
+        for x in xs:
+            if x not in seen:
+                out.append(x)
+                seen.add(x)
+        return out
+
+    # ---- name ----
+    dim_str = "×".join(dims)  # e.g. rep×exp×fov
+    n_files = 0
+    # prov includes the leaf file lists; easiest is to count them
+    for rec in prov:
+        if rec.get("dim") == dims[-1] and "files" in rec:
+            n_files += len(rec["files"])
+
+    ln = _uniq_keep_order([x for x in leaf_names if x])
+    if len(ln) == 0:
+        ta.ds.attrs["name"] = f"concat[{n_files}] ({dim_str})"
+    elif len(ln) == 1:
+        ta.ds.attrs["name"] = f"{ln[0]} (concat[{n_files}] {dim_str})"
+    else:
+        ta.ds.attrs["name"] = f"{Path(ln[0]).stem} +{len(ln)-1} (concat[{n_files}] {dim_str})"
+
+    # ---- notes ----
+    notes_u = _uniq_keep_order([x for x in leaf_notes if x])
+    if len(notes_u) == 0:
+        # leave existing notes alone (or set to empty if you prefer)
+        pass
+    elif len(notes_u) == 1:
+        ta.ds.attrs["notes"] = notes_u[0]
+    else:
+        ta.ds.attrs["notes"] = "\n\n---\n\n".join(notes_u)
+
+    # ==========================================================
+    # ULTRAMINIMAL CONCAT METADATA (for deterministic filenames)
+    # ==========================================================
+    try:
+        # Collect leaf names from provenance
+        leaf_files = []
+        for rec in prov:
+            if isinstance(rec, dict) and "files" in rec:
+                leaf_files.extend(rec["files"])
+
+        n_files = len(leaf_files)
+
+        # Determine base name from first leaf dataset
+        base_name = None
+        if leaf_files:
+            first_path = Path(leaf_files[0])
+            base_name = first_path.stem
+
+        # Fallback to existing name attr if needed
+        if not base_name:
+            base_name = str(ta.ds.attrs.get("name", "")).strip()
+
+        # Clean base_name (filesystem friendly)
+        import re
+        base_name = (base_name or "croparray").strip()
+        base_name = re.sub(r"\s+", "_", base_name)
+        base_name = re.sub(r"[^A-Za-z0-9._-]+", "", base_name)
+        base_name = base_name.strip("._-") or "croparray"
+
+        # Store structured metadata
+        import json
+        ta.ds.attrs["concat_meta_json"] = json.dumps(
+            {"base_name": base_name, "n_files": int(n_files), "dims": list(dims)},
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+
+
+    except Exception:
+        # Never let filename metadata break concat
+        pass
+
+
 
     return ta
 

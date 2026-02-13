@@ -141,9 +141,6 @@ def montage(ds: xr.Dataset, *, col: str = "t", row: str = "n", **kwargs) -> xr.D
 
     return out
 
-
-
-
 def rescale_rgb_0_255(arr):
     """
     Rescale an image array to uint8 [0, 255] using global min/max.
@@ -161,7 +158,6 @@ def rescale_rgb_0_255(arr):
     out = (arr - vmin) / (vmax - vmin)
     out = np.clip(out * 255, 0, 255).astype(np.uint8)
     return out
-
 
 def show_rgb_large(img8, *, scale=1.0, title=None):
     """
@@ -184,7 +180,6 @@ def show_rgb_large(img8, *, scale=1.0, title=None):
     if title:
         plt.title(title)
     plt.show()
-
 
 # --- Seaborn figure-level wrappers (relplot/displot/catplot) -----------------
 

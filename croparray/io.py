@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-from typing import Any, Literal, overload
+from typing import Any, Literal, overload, Union
 import xarray as xr
 from .crop_array_object import CropArray
-
 import os
 from pathlib import Path
+from .trackarray.object import TrackArray
+import re
+import json
+
+from .crop_array_object import CropArray
+from .trackarray.object import TrackArray
+
+
+__all__ = ["save_croparray", "open_trackarray", "open_as_trackarray", "open_croparray", "open_croparray_zarr"]
 
 def _manual_filter_sidecar_paths(path_nc: str) -> list[str]:
     """
@@ -197,7 +205,6 @@ def open_croparray_zarr(store: str, *, as_object: bool = True, **kwargs: Any) ->
 
     return ds
 
-
 def open_as_trackarray(
     path: str,
     *,
@@ -230,8 +237,6 @@ def open_as_trackarray(
     # Always open as CropArray internally
     ca = open_croparray(path, as_object=True, **kwargs)
 
-#    ca = open_croparray(fn, as_object=True)
-
     # --- backward-compat / schema guard ---
     if "track_id" not in ca.ds:
         raise KeyError(
@@ -261,3 +266,173 @@ def open_as_trackarray(
     # Help GC in large pipelines
     del ca
     return ta
+
+@overload
+def open_trackarray(
+    path: str,
+    *,
+    as_object: Literal[True] = True,
+    load_manual_filters: bool = True,
+    **kwargs: Any,
+) -> TrackArray: ...
+@overload
+def open_trackarray(
+    path: str,
+    *,
+    as_object: Literal[False],
+    load_manual_filters: bool = True,
+    **kwargs: Any,
+) -> xr.Dataset: ...
+def open_trackarray(
+    path: str,
+    *,
+    as_object: bool = True,
+    load_manual_filters: bool = True,
+    **kwargs: Any,
+) -> TrackArray | xr.Dataset:
+    ds = xr.open_dataset(path, **kwargs)
+
+    if "track_id" not in ds.dims:
+        raise ValueError(
+            f"{path} does not look like a TrackArray dataset (missing 'track_id' dim). "
+            "Use `open_croparray()` or `open_as_trackarray()` instead."
+        )
+
+    if load_manual_filters:
+        ds = _merge_manual_filter_sidecars_track(ds, path)
+
+    if as_object:
+        return TrackArray(ds)
+
+    return ds
+
+def _slugify_filename(s: str) -> str:
+    s = (s or "").strip()
+    if not s:
+        return "croparray"
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9._-]+", "", s)
+    s = s.strip("._-")
+    return s or "croparray"
+
+def _concat_ultraminimal_stem(ds: xr.Dataset) -> str | None:
+    meta_json = ds.attrs.get("concat_meta_json", None)
+    if not isinstance(meta_json, str) or not meta_json.strip():
+        return None
+    try:
+        meta = json.loads(meta_json)
+    except Exception:
+        return None
+    if not isinstance(meta, dict):
+        return None
+
+    base = str(meta.get("base_name", "")).strip()
+    if not base:
+        return None
+
+    try:
+        n_files = int(meta.get("n_files", 0))
+    except Exception:
+        return None
+
+    dims = meta.get("dims", [])
+    if not isinstance(dims, (list, tuple)):
+        dims = []
+
+    base_s = _slugify_filename(base)
+    dims_s = "_".join(_slugify_filename(str(d)) for d in dims if str(d).strip())
+    if dims_s:
+        return f"{base_s}__{n_files}{dims_s}"
+    return f"{base_s}__{n_files}"
+
+def save_croparray(
+    obj: xr.Dataset,
+    *,
+    output_dir: str | Path,
+    filename: str | None = None,
+    ext: str = ".nc",
+    overwrite: bool = False,
+    mkdir: bool = True,
+    to_netcdf_kwargs: dict[str, Any] | None = None,
+) -> Path: ...
+def save_croparray(
+    obj: CropArray | TrackArray | xr.Dataset,
+    *,
+    output_dir: str | Path,
+    filename: str | None = None,
+    ext: str = ".nc",
+    overwrite: bool = False,
+    mkdir: bool = True,
+    to_netcdf_kwargs: dict[str, Any] | None = None,
+) -> Path:
+    """
+    Save a CropArray/TrackArray (or raw xarray.Dataset) to NetCDF.
+
+    If `filename` is not provided, uses ds.attrs["name"] (slugified) as the stem.
+
+    Parameters
+    ----------
+    obj
+        CropArray, TrackArray, or xarray.Dataset. If object has `.ds`, that dataset is saved.
+    output_dir
+        Directory to write into.
+    filename
+        Optional filename. If None, derives from ds.attrs["name"].
+        If provided without suffix, `ext` is appended.
+    ext
+        Default ".nc".
+    overwrite
+        If False (default), refuse to overwrite.
+    mkdir
+        If True (default), create output_dir if needed.
+    to_netcdf_kwargs
+        Extra kwargs passed to `Dataset.to_netcdf`.
+
+    Returns
+    -------
+    pathlib.Path
+        The written file path.
+    """
+    ds: xr.Dataset = obj.ds if hasattr(obj, "ds") else obj
+    if not isinstance(ds, xr.Dataset):
+        raise TypeError(f"save_croparray expected CropArray/TrackArray/xr.Dataset, got {type(obj)!r}")
+
+    out_dir = Path(output_dir)
+    if mkdir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        stem = _concat_ultraminimal_stem(ds)
+        if stem is None:
+            # fallback: slugify the human-readable name
+            stem = _slugify_filename(str(ds.attrs.get("name", "")).strip())
+        filename = stem
+    else:
+        filename = str(filename).strip()
+
+
+    # Append ext if user provided a stem without suffix
+    if not Path(filename).suffix:
+        filename = filename + ext
+
+    out_path = out_dir / filename
+
+    if out_path.exists() and not overwrite:
+        raise FileExistsError(f"{out_path} already exists. Refusing to overwrite. Set overwrite=True to replace it.")
+
+    kwargs = {"mode": "w"}
+    if to_netcdf_kwargs:
+        kwargs.update(to_netcdf_kwargs)
+
+    # Work on a shallow copy so we don't mutate the in-memory object
+    ds_to_save = ds.copy(deep=False)
+
+    # Store filename metadata (NetCDF-safe string)
+    ds_to_save.attrs["filename"] = out_path.name
+
+    # Optional: also store full path (sometimes useful)
+    # ds_to_save.attrs["filepath"] = str(out_path)
+
+    ds_to_save.to_netcdf(out_path, **kwargs)
+
+    return out_path
