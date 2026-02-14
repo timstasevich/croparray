@@ -410,6 +410,8 @@ def save_croparray(
     else:
         filename = str(filename).strip()
 
+    # Ensure filename is just a name, not a path
+    filename = os.path.basename(filename)
 
     # Append ext if user provided a stem without suffix
     if not Path(filename).suffix:
@@ -418,11 +420,27 @@ def save_croparray(
     out_path = out_dir / filename
 
     if out_path.exists() and not overwrite:
-        raise FileExistsError(f"{out_path} already exists. Refusing to overwrite. Set overwrite=True to replace it.")
+        raise FileExistsError(
+            f"{out_path} already exists. Refusing to overwrite. Set overwrite=True to replace it."
+        )
 
-    kwargs = {"mode": "w"}
+    # Base kwargs
+    kwargs: dict[str, Any] = {}
     if to_netcdf_kwargs:
         kwargs.update(to_netcdf_kwargs)
+
+    # Force correct mode:
+    # - first save (file missing) must be "w"
+    # - overwrite=True should be "w"
+    if (not out_path.exists()) or overwrite:
+        kwargs["mode"] = "w"
+    else:
+        # Should never hit because of the exists+not overwrite guard above,
+        # but keep it explicit.
+        kwargs.setdefault("mode", "w")
+
+    # Ensure output directory exists (even if mkdir=False)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Work on a shallow copy so we don't mutate the in-memory object
     ds_to_save = ds.copy(deep=False)
@@ -430,9 +448,6 @@ def save_croparray(
     # Store filename metadata (NetCDF-safe string)
     ds_to_save.attrs["filename"] = out_path.name
 
-    # Optional: also store full path (sometimes useful)
-    # ds_to_save.attrs["filepath"] = str(out_path)
-
-    ds_to_save.to_netcdf(out_path, **kwargs)
+    ds_to_save.to_netcdf(str(out_path), **kwargs)
 
     return out_path

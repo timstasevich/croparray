@@ -1006,10 +1006,10 @@ def _tile_axis_1d_ids(m: xr.Dataset, *, coord_name: str, tile_dim: str, pixel_di
 
     raise ValueError(f"Coord {coord_name!r} has unexpected dims {da.dims}.")
 
+
 def manual_filter_montage(
     ds: xr.Dataset,
     *,
-    output_dir: str | Path,
     row: str,
     col: str,
     filter_name: str = "manual_filter",
@@ -1020,12 +1020,12 @@ def manual_filter_montage(
     write_back: bool = True,
     overlay_opacity: float = 0.35,
     single_click_delay_ms: int = 100,
-    colormaps: dict[str, Any] | None = None,
-    label_colors: dict[int, Any] | None = None,
+    colormaps: dict[str, Any] | None = None,          # NEW
+    label_colors: dict[int, Any] | None = None,       # NEW (optional override)
+    output_dir: str | Path,
     show_click_info: bool = False,
-    show_tile_text: bool = False,
+    show_tile_text: bool = False, 
 ) -> tuple[napari.Viewer, dict[str, Any], xr.DataArray]:
-    ...
     """
     Launch an interactive napari montage viewer for manual binary filtering
     of tiles (e.g., track_id × t) and create/update a filter table.
@@ -1614,45 +1614,42 @@ def manual_filter_montage(
 
         _paint_tile_pixel(mr, mc, new, t_idx_for_pixels=t_idx_for_pixels)
 
+
+
+
     dirty = False  # staged edits not yet committed to ds
 
+
     def _write_filter_table_back():
-        nonlocal dirty, filter_table_committed
-        # Commit staged table to ds
-        filter_table_u8 = filter_table.astype(np.uint8)
-        ds[filter_name] = filter_table_u8
-        # Refresh committed snapshot (used by "Clear staged" = revert)
-        filter_table_committed = filter_table_u8.copy(deep=True)
+        nonlocal dirty
+        # Write the full contextual filter table back
+        ds[filter_name] = filter_table.astype(np.uint8)
         dirty = False
 
+
     def _clear_filter_table():
-        """Revert staged edits back to last-committed state (does not modify ds)."""
-        nonlocal dirty, filter_table_committed
+        """Clear staged edits only (does not touch ds)."""
+        nonlocal dirty
 
-        ctx = _current_context_isel()  # indices for context dims (e.g. fov/exp/cell)
+        # Clear ONLY the current context slice (exp/cell/rep/...)
+        ctx = _current_context_isel()
         if ctx:
+            # Only keep dims that actually exist on filter_table
             ft_ctx = {d: int(i) for d, i in ctx.items() if d in filter_table.dims}
+            if ft_ctx:
+                filter_table.loc[ft_ctx] = 0
+            else:
+                # no matching context dims on filter_table -> clear all
+                filter_table.loc[:] = 0
         else:
-            ft_ctx = {}
+            filter_table.loc[:] = 0
 
-        if ft_ctx:
-            sl = [slice(None)] * filter_table.ndim
-            for d, i in ft_ctx.items():
-                sl[filter_table.dims.index(d)] = int(i)
-            sl = tuple(sl)
+        dirty = True
 
-            # Restore staged slice from committed snapshot
-            filter_table.data[sl] = filter_table_committed.data[sl]
-        else:
-            # No context dims -> restore entire staging table
-            filter_table.data[...] = filter_table_committed.data[...]
-
-        dirty = False  # optional: you just reverted staged to committed, so no longer dirty
-
-        # refresh overlay from current view
+        # Rebuild overlay pixels from the current context slice
         overlay = _overlay_pixels_from_filter_table(
             m=m,
-            filter_table=_view_filter_table(),
+            filter_table=_view_filter_table(),  # must return (tile_dim, t) slice
             tile_dim=tile_dim,
             row=row,
             col=col,
@@ -1869,7 +1866,7 @@ def manual_filter_montage(
     layout_top = QVBoxLayout(w_top)
 
     help_lbl = QLabel(
-        "In the manual filter layer:\n"
+        "Manual filter:\n"
         "- Alt+Click: Select crop (toggles)\n"
         "- Shift+Click: Select crop all times (toggles)\n"
         "- Press 'Save/Update' to write into ds\n"
@@ -1895,69 +1892,27 @@ def manual_filter_montage(
     w_bottom = QWidget()
     layout_bottom = QVBoxLayout(w_bottom)
 
-    btn_clear = QPushButton("Revert staged to saved")
+    btn_clear = QPushButton("Clear (staged only)")
+    btn_save_file = QPushButton("Save to file")
 
     def _on_clear():
         _clear_filter_table()
 
     from napari.utils.notifications import show_info, show_error
-    from qtpy.QtWidgets import QMessageBox, QLineEdit, QLabel
-
-    # Default filename comes from ds.attrs["filename"] when available (CropArray wrapper),
-    # otherwise fall back to the opened file basename, otherwise a generic name.
-    _default_fn = None
-    try:
-        _default_fn = ds.attrs.get("filename", None)
-    except Exception:
-        _default_fn = None
-    if not (isinstance(_default_fn, str) and _default_fn.strip()):
-        try:
-            _src = ds.encoding.get("source", None)
-        except Exception:
-            _src = None
-        if isinstance(_src, str) and _src.strip():
-            _default_fn = os.path.basename(_src.strip())
-        else:
-            _default_fn = "croparray.nc"
-    _default_fn = os.path.basename(str(_default_fn).strip())
-
-    # Editable filename field (saved as output_dir/filename)
-    layout_bottom.addWidget(QLabel("Filename (output_dir/filename):"))
-    le_filename = QLineEdit(_default_fn)
-    layout_bottom.addWidget(le_filename)
-
-    btn_save_file = QPushButton("Save to file (overwrite)")
-
-    def _resolve_out_dir() -> str:
-        if output_dir is not None:
-            return str(output_dir)
-        try:
-            src = ds.encoding.get("source", None)
-        except Exception:
-            src = None
-        if isinstance(src, str) and src.strip():
-            return os.path.dirname(src)
-        return os.getcwd()
+    from qtpy.QtWidgets import QMessageBox
 
     def _on_save_file():
         try:
-            # Commit staged edits into ds[filter_name]
+            # commit staged edits into ds[filter_name]
             _write_filter_table_back()
 
-            out_dir = _resolve_out_dir()
-            os.makedirs(out_dir, exist_ok=True)
+            path = _manual_filter_sidecar_path(ds, filter_name=filter_name, output_dir=output_dir)
 
-            fn = le_filename.text().strip()
-            if not fn:
-                raise ValueError("Filename cannot be empty.")
-            fn = os.path.basename(fn)  # prevent directory traversal via UI
-            path = os.path.join(out_dir, fn)
-
-            # Confirm overwrite if exists (same UX as current warning)
+            # confirm overwrite if exists
             if os.path.exists(path):
                 reply = QMessageBox.question(
                     viewer.window._qt_window,
-                    "Overwrite file?",
+                    "Overwrite manual filter?",
                     f"This will overwrite:\n\n{path}\n\nAre you sure?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,
@@ -1965,18 +1920,12 @@ def manual_filter_montage(
                 if reply != QMessageBox.Yes:
                     return
 
-            # Keep attrs in sync with chosen filename (useful for next save default)
-            try:
-                ds.attrs["filename"] = fn
-            except Exception:
-                pass
-
-            # Overwrite the full dataset in a single file (no sidecar)
-            ds.to_netcdf(path, mode="w")
-            show_info(f"Saved dataset:\n{path}")
+            written = save_manual_filter_sidecar(ds, filter_name=filter_name, output_dir=output_dir)
+            show_info(f"Saved manual filter:\n{written}")
 
         except Exception as e:
-            show_error(f"Failed to save dataset:\n{e}")
+            show_error(f"Failed to save manual filter:\n{e}")
+
 
     btn_clear.clicked.connect(_on_clear)
     btn_save_file.clicked.connect(_on_save_file)
