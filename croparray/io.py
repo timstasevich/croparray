@@ -38,7 +38,8 @@ def _merge_manual_filter_sidecars_crop(ds: xr.Dataset, path_nc: str) -> xr.Datas
     to_merge: list[xr.Dataset] = [ds]
     for sc in sidecars:
         try:
-            ds_sc = xr.open_dataset(sc)
+            with xr.open_dataset(sc) as _tmp:
+                ds_sc = _tmp.load()
         except Exception:
             continue
 
@@ -65,7 +66,8 @@ def _merge_manual_filter_sidecars_track(ds: xr.Dataset, path_nc: str) -> xr.Data
     to_merge: list[xr.Dataset] = [ds]
     for sc in sidecars:
         try:
-            ds_sc = xr.open_dataset(sc)
+            with xr.open_dataset(sc) as _tmp:
+                ds_sc = _tmp.load()
         except Exception:
             continue
 
@@ -211,6 +213,7 @@ def open_as_trackarray(
     drop_vars=("int",),
     drop_errors: str = "ignore",
     as_object: bool = True,
+    load_manual_filters: bool = True,
     **kwargs,
 ):
     """
@@ -235,7 +238,12 @@ def open_as_trackarray(
     TrackArray or xarray.Dataset
     """
     # Always open as CropArray internally
-    ca = open_croparray(path, as_object=True, **kwargs)
+    ca = open_croparray(
+        path,
+        as_object=True,
+        load_manual_filters=load_manual_filters,
+        **kwargs,
+    )
 
     # --- backward-compat / schema guard ---
     if "track_id" not in ca.ds:
@@ -255,7 +263,7 @@ def open_as_trackarray(
     from . import crop_array_tools
 
     ta = crop_array_tools.track_array(ca, as_object=as_object)
-    if kwargs.get("load_manual_filters", True):
+    if load_manual_filters:
     # ta may be TrackArray wrapper or raw dataset depending on as_object
         if hasattr(ta, "ds"):
             ta.ds = _merge_manual_filter_sidecars_track(ta.ds, path)

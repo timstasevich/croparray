@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 
 import xarray as xr
-from typing import Sequence, TYPE_CHECKING
+from typing import Sequence, TYPE_CHECKING, Any
 from .tracking import to_track_array as _to_track_array
 
 if TYPE_CHECKING:
@@ -268,29 +268,132 @@ class CropArray:
             memory=memory,
         )
     
+    # -----------------------------
+    # xarray passthrough helpers
+    # -----------------------------
+    def _wrap_ds(self, ds: xr.Dataset):
+        """Wrap an xarray.Dataset back into the same wrapper type (CropArray or TrackArray)."""
+        return type(self)(ds)
+
+    def _call(self, name: str, *args, **kwargs):
+        """Call an xarray.Dataset method by name and re-wrap the result."""
+        return self._wrap_ds(getattr(self.ds, name)(*args, **kwargs))
+
+    # -----------------------------
+    # selection / dropping
+    # -----------------------------
     def sel(self, *args, **kwargs):
         """xarray-like selection that preserves the wrapper type."""
-        return type(self)(self.ds.sel(*args, **kwargs))
+        return self._call("sel", *args, **kwargs)
 
     def isel(self, *args, **kwargs):
         """xarray-like index selection that preserves the wrapper type."""
-        return type(self)(self.ds.isel(*args, **kwargs))
+        return self._call("isel", *args, **kwargs)
 
     def where(self, *args, **kwargs):
         """xarray-like where that preserves the wrapper type."""
-        return type(self)(self.ds.where(*args, **kwargs))
+        return self._call("where", *args, **kwargs)
 
     def drop_vars(self, *args, **kwargs):
         """Drop variables and preserve wrapper type."""
-        return type(self)(self.ds.drop_vars(*args, **kwargs))
+        return self._call("drop_vars", *args, **kwargs)
 
     def drop_sel(self, *args, **kwargs):
         """Drop selection and preserve wrapper type."""
-        return type(self)(self.ds.drop_sel(*args, **kwargs))
+        return self._call("drop_sel", *args, **kwargs)
 
     def drop_isel(self, *args, **kwargs):
         """Drop index selection and preserve wrapper type."""
-        return type(self)(self.ds.drop_isel(*args, **kwargs))
+        return self._call("drop_isel", *args, **kwargs)
+
+    # -----------------------------
+    # reductions / aggregations
+    # -----------------------------
+    def mean(self, *args, **kwargs):
+        """
+        xarray-like mean that preserves wrapper type.
+        """
+        return self._call("mean", *args, **kwargs)
+
+    def sum(self, *args, **kwargs):
+        return self._call("sum", *args, **kwargs)
+
+    def median(self, *args, **kwargs):
+        return self._call("median", *args, **kwargs)
+
+    def std(self, *args, **kwargs):
+        return self._call("std", *args, **kwargs)
+
+    def max(self, *args, **kwargs):
+        return self._call("max", *args, **kwargs)
+
+    def min(self, *args, **kwargs):
+        return self._call("min", *args, **kwargs)
+
+    def quantile(self, *args, **kwargs):
+        return self._call("quantile", *args, **kwargs)
+
+    def count(self, *args, **kwargs):
+        return self._call("count", *args, **kwargs)
+
+    def any(self, *args, **kwargs):
+        return self._call("any", *args, **kwargs)
+
+    def all(self, *args, **kwargs):
+        return self._call("all", *args, **kwargs)
+
+    # -----------------------------
+    # sorting / ranking
+    # -----------------------------
+    def sortby(self, *args, **kwargs):
+        return self._call("sortby", *args, **kwargs)
+
+    def rank(self, *args, **kwargs):
+        return self._call("rank", *args, **kwargs)
+
+    # -----------------------------
+    # missing data
+    # -----------------------------
+    def fillna(self, *args, **kwargs):
+        return self._call("fillna", *args, **kwargs)
+
+    def dropna(self, *args, **kwargs):
+        return self._call("dropna", *args, **kwargs)
+
+    def interpolate_na(self, *args, **kwargs):
+        return self._call("interpolate_na", *args, **kwargs)
+
+    # -----------------------------
+    # rolling
+    # -----------------------------
+    def rolling(self, *args, **kwargs):
+        """
+        Return xarray's rolling object.
+
+        Note: rolling(...).mean() returns an xr.Dataset, so you'll lose the wrapper
+        unless you use rolling_mean/rolling_sum below.
+        """
+        return self.ds.rolling(*args, **kwargs)
+
+    def rolling_mean(self, *args, **kwargs):
+        """Wrapper-preserving rolling mean: type(self)(self.ds.rolling(...).mean(...))."""
+        return self._wrap_ds(self.ds.rolling(*args, **kwargs).mean())
+
+    def rolling_sum(self, *args, **kwargs):
+        """Wrapper-preserving rolling sum: type(self)(self.ds.rolling(...).sum(...))."""
+        return self._wrap_ds(self.ds.rolling(*args, **kwargs).sum())
+
+    def __getitem__(self, key):
+        """xarray-like variable access: wrapper['var'] -> wrapper.ds['var']."""
+        return self.ds[key]
+
+    def __setitem__(self, key, value):
+        """
+        Allow wrapper["var"] = value assignment.
+        """
+        self.ds[key] = value
+
+
 
     @classmethod
     def concat(
