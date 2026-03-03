@@ -8,13 +8,6 @@ This module is intended for creating and manipulating an array of crops (or regi
 
 ## Documentation
 * Documentation is accessible via [croparray.readthedocs](https://croparray.readthedocs.io)
-
-## Colab implementation
-* Implementation in Google Colab  
-  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Ru-_ak9PpW9bGM_H9SlffmdDQOxG16-4?usp=sharing)
-
-<img src="https://github.com/Colorado-State-University-Stasevich-Lab/croparray/raw/main/docs/images/Croparray.gif" alt="drawing" width="1000"/>
-
 ---
 
 ## Local installation from the GitHub repository (Recommended)
@@ -27,7 +20,7 @@ https://www.anaconda.com
 
 ### 2. Clone the GitHub repository
 ```bash
-git clone https://github.com/Colorado-State-University-Stasevich-Lab/croparray.git
+git clone https://github.com/timstasevich/croparray.git
 cd croparray
 ```
 
