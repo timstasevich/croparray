@@ -770,150 +770,151 @@ pd.DataFrame"""
         return _impl_CropArrayBuild_standardize_spots(source, tracker=tracker, fov=fov, xy_um_per_px=xy_um_per_px, z_um_per_plane=z_um_per_plane, keep_cols=keep_cols, require_calibration_if_needed=require_calibration_if_needed)
 
     def create_crop_array(self, video, df, axes=None, as_object=True, **kwargs):
-        """Build a crop-array from raw inputs.
+        """    Build a crop-array from raw inputs.
 
-Parameters
-----------
-video
-    Input video array. If `axes` is None, this must already be ordered
-    (fov, f, z, y, x, ch). If `axes` is provided, `video` may be in any
-    order described by `axes` (e.g. from `ca.gui.label_video_axes(...).axes`).
-df
-    Spot / crop definition table.
-axes : sequence of str, optional
-    Axis labels describing the CURRENT order of `video`.
-    If provided, `video` will be reordered into croparray canonical order:
-    (fov, f, z, y, x, ch) via `standardize_video_axes(video, axes)`.
-    Accepted labels: fov, f, z, y, x, ch (synonyms: t->f, c->ch).
-as_object : bool, default True
-    If True, return a CropArray wrapper (method-style API).
-    If False, return the raw xarray.Dataset (legacy behavior).
-**kwargs
-    Passed through to `_create_crop_array_dataset`.
+    Parameters
+    ----------
+    video
+        Input video array. If `axes` is None, this must already be ordered
+        (fov, f, z, y, x, ch). If `axes` is provided, `video` may be in any
+        order described by `axes` (e.g. from `ca.gui.label_video_axes(...).axes`).
+    df
+        Spot / crop definition table.
+    axes : sequence of str, optional
+        Axis labels describing the CURRENT order of `video`.
+        If provided, `video` will be reordered into croparray canonical order:
+        (fov, f, z, y, x, ch) via `standardize_video_axes(video, axes)`.
+        Accepted labels: fov, f, z, y, x, ch (synonyms: t->f, c->ch).
+    as_object : bool, default True
+        If True, return a CropArray wrapper (method-style API).
+        If False, return the raw xarray.Dataset (legacy behavior).
+    **kwargs
+        Passed through to `_create_crop_array_dataset`.
 
-Returns
--------
-CropArray or xarray.Dataset
-
+    Returns
+    -------
+    CropArray or xarray.Dataset
+    
 
 ---
 
 
-Create a crop-array xarray.Dataset from a 6D video and a dataframe of detected spots.
+    Create a crop-array xarray.Dataset from a 6D video and a dataframe of detected spots.
 
-This function extracts fixed-size crops around detected spots from a time-lapse
-3D (z-stack) video and organizes them into a structured xarray Dataset (“crop array”).
-Crops are always centered in the lateral (x,y) directions; axial (z) handling depends
-on whether z positions are provided.
+    This function extracts fixed-size crops around detected spots from a time-lapse
+    3D (z-stack) video and organizes them into a structured xarray Dataset (“crop array”).
+    Crops are always centered in the lateral (x,y) directions; axial (z) handling depends
+    on whether z positions are provided.
 
-Parameters
-----------
-video : numpy.ndarray
-    A 6D numpy array containing the raw image data with dimensions ordered as:
-        (fov, f, z, y, x, ch)
+    Parameters
+    ----------
+    video : numpy.ndarray
+        A 6D numpy array containing the raw image data with dimensions ordered as:
+            (fov, f, z, y, x, ch)
 
-    where:
-        fov : field of view
-        f   : frame (time)
-        z   : axial plane index
-        y   : lateral y coordinate
-        x   : lateral x coordinate
-        ch  : imaging channel
+        where:
+            fov : field of view
+            f   : frame (time)
+            z   : axial plane index
+            y   : lateral y coordinate
+            x   : lateral x coordinate
+            ch  : imaging channel
 
-df : pandas.DataFrame
-    DataFrame describing the detected spots to be cropped. At minimum, the following
-    columns are required:
+    df : pandas.DataFrame
+        DataFrame describing the detected spots to be cropped. At minimum, the following
+        columns are required:
 
-        - 'fov' : field-of-view index (integer or filename-like identifier)
-        - 'f'   : frame index (integer, starting at 0)
-        - 'xc'  : x-position of the spot center in **movie pixel coordinates**
-        - 'yc'  : y-position of the spot center in **movie pixel coordinates**
+            - 'fov' : field-of-view index (integer or filename-like identifier)
+            - 'f'   : frame index (integer, starting at 0)
+            - 'xc'  : x-position of the spot center in **movie pixel coordinates**
+            - 'yc'  : y-position of the spot center in **movie pixel coordinates**
 
-    Optional columns:
+        Optional columns:
 
-        - 'zc' : axial (z) position of the spot center in **movie z-index units**.
-                May be float (sub-plane precision). If provided together with
-                `z_pad > 0`, crops will be extracted from a z-slab centered on this
-                position.
-        - 'id' : integer spot identifier. If missing, a unique id is generated.
-        - 'track_id' : integer track identifier (-1 indicates untracked).
-        - Any additional numeric columns will be converted into per-crop xarray
-        variables with dimensions (fov, n, t).
+            - 'zc' : axial (z) position of the spot center in **movie z-index units**.
+                    May be float (sub-plane precision). If provided together with
+                    `z_pad > 0`, crops will be extracted from a z-slab centered on this
+                    position.
+            - 'id' : integer spot identifier. If missing, a unique id is generated.
+            - 'track_id' : integer track identifier (-1 indicates untracked).
+            - Any additional numeric columns will be converted into per-crop xarray
+            variables with dimensions (fov, n, t).
 
-xy_pad : int, optional
-    Number of pixels to pad on either side of the crop center in the x and y directions.
-    Each crop will have size (2*xy_pad + 1, 2*xy_pad + 1) in (y, x).
+    xy_pad : int, optional
+        Number of pixels to pad on either side of the crop center in the x and y directions.
+        Each crop will have size (2*xy_pad + 1, 2*xy_pad + 1) in (y, x).
 
-z_pad : int, optional
-    Number of z-planes to include on either side of the provided z center.
-    If `z_pad > 0` and df contains a 'zc' column, crops are extracted as a z-slab of
-    depth (2*z_pad + 1) centered on the rounded z index.
-    If `z_pad == 0` or 'zc' is not provided, all z planes are retained.
+    z_pad : int, optional
+        Number of z-planes to include on either side of the provided z center.
+        If `z_pad > 0` and df contains a 'zc' column, crops are extracted as a z-slab of
+        depth (2*z_pad + 1) centered on the rounded z index.
+        If `z_pad == 0` or 'zc' is not provided, all z planes are retained.
 
-dx, dy, dz : float, optional
-    Physical size of a pixel in the x, y, and z directions, respectively.
-    These values are stored as metadata and used for coordinate construction, but do
-    not affect cropping.
+    dx, dy, dz : float, optional
+        Physical size of a pixel in the x, y, and z directions, respectively.
+        These values are stored as metadata and used for coordinate construction, but do
+        not affect cropping.
 
-dt : float, optional
-    Time interval between consecutive frames. Stored as metadata.
+    dt : float, optional
+        Time interval between consecutive frames. Stored as metadata.
 
-homography : list of numpy.ndarray, optional
-    A list of 3×3 homography matrices, one per channel, used to correct lateral (x,y)
-    misalignments between channels. Homographies are applied to the *float* (xc, yc)
-    coordinates prior to cropping.
+    homography : list of numpy.ndarray, optional
+        A list of 3×3 homography matrices, one per channel, used to correct lateral (x,y)
+        misalignments between channels. Homographies are applied to the *float* (xc, yc)
+        coordinates prior to cropping.
 
-Returns
--------
-xarray.Dataset
-    A crop-array dataset with coordinates:
-        - fov : field of view
-        - n   : crop index (spot counter per frame per fov)
-        - t   : time
-        - z   : axial coordinate (full stack or slab-relative)
-        - y   : lateral y coordinate (centered on 0)
-        - x   : lateral x coordinate (centered on 0)
-        - ch  : channel
+    Returns
+    -------
+    xarray.Dataset
+        A crop-array dataset with coordinates:
+            - fov : field of view
+            - n   : crop index (spot counter per frame per fov)
+            - t   : time
+            - z   : axial coordinate (full stack or slab-relative)
+            - y   : lateral y coordinate (centered on 0)
+            - x   : lateral x coordinate (centered on 0)
+            - ch  : channel
 
-    Core data variables include:
+        Core data variables include:
 
-    1. int : (fov, n, t, z, y, x, ch)
-        Cropped intensity data.
+        1. int : (fov, n, t, z, y, x, ch)
+            Cropped intensity data.
 
-    2. xc, yc, zc : (fov, n, t, ch)
-        Global **movie-coordinate** spot positions stored as floats.
-        These are suitable for trajectory analysis, MSD calculations, and spatial
-        measurements.
+        2. xc, yc, zc : (fov, n, t, ch)
+            Global **movie-coordinate** spot positions stored as floats.
+            These are suitable for trajectory analysis, MSD calculations, and spatial
+            measurements.
 
-    3. xc_pix, yc_pix, zc_pix : (fov, n, t, ch)
-        Rounded integer pixel indices corresponding to the global positions.
-        These are used internally for indexing and cropping.
+        3. xc_pix, yc_pix, zc_pix : (fov, n, t, ch)
+            Rounded integer pixel indices corresponding to the global positions.
+            These are used internally for indexing and cropping.
 
-    4. xc_pad, yc_pad : (fov, n, t, ch)
-        Pixel indices into the *padded* video used during crop extraction.
+        4. xc_pad, yc_pad : (fov, n, t, ch)
+            Pixel indices into the *padded* video used during crop extraction.
 
-    5. z_pos : (fov, n, t, ch)
-        Local z index into the stored z dimension used for best-z selection.
-        A value of -1 indicates an invalid or unknown z position.
-        This variable is consumed by `best_z_proj(use_z_pos=True)` and should not
-        be interpreted as a physical coordinate.
+        5. z_pos : (fov, n, t, ch)
+            Local z index into the stored z dimension used for best-z selection.
+            A value of -1 indicates an invalid or unknown z position.
+            This variable is consumed by `best_z_proj(use_z_pos=True)` and should not
+            be interpreted as a physical coordinate.
 
-    6. id : (fov, n, t)
-        Spot identifier.
+        6. id : (fov, n, t)
+            Spot identifier.
 
-    7. track_id : (fov, n, t)
-        Track assignment (-1 = untracked).
+        7. track_id : (fov, n, t)
+            Track assignment (-1 = untracked).
 
-    Additional numeric columns in `df` are converted into per-crop variables with
-    dimensions (fov, n, t).
+        Additional numeric columns in `df` are converted into per-crop variables with
+        dimensions (fov, n, t).
 
-Notes
------
-- Global coordinates (`xc`, `yc`, `zc`) are never rounded and retain subpixel precision.
-- Pixel index variables (`*_pix`, `*_pad`, `z_pos`) are used strictly for array indexing.
-- When z-slab mode is active, the z coordinate of the dataset is slab-relative and
-centered at zero; the original global z position is preserved in `zc`.
-- Crops that cannot be extracted due to out-of-bounds coordinates remain zero-filled."""
+    Notes
+    -----
+    - Global coordinates (`xc`, `yc`, `zc`) are never rounded and retain subpixel precision.
+    - Pixel index variables (`*_pix`, `*_pad`, `z_pos`) are used strictly for array indexing.
+    - When z-slab mode is active, the z coordinate of the dataset is slab-relative and
+    centered at zero; the original global z position is preserved in `zc`.
+    - Crops that cannot be extracted due to out-of-bounds coordinates remain zero-filled.
+    """
         return _impl_CropArrayBuild_create_crop_array(video, df, axes=axes, as_object=as_object, **kwargs)
 
     def make_croparrays(self, videos, spots, out_dir=None, out_ext='.nc', axes=None, define_axes=True, axes_source_index=0, tracker='auto', xy_um_per_px=None, z_um_per_plane=None, keep_cols=None, xy_pad=10, z_pad=1, dx=None, dy=None, dz=None, dt=None, units=None, date=None, as_object=False, skip_existing=True, progress=True, notes='A croparray built from a tracking file and a video.'):
@@ -933,65 +934,75 @@ Returns:
   - If out_dir is provided: returns list of output paths written (skipped files omitted)"""
         return _impl_CropArrayBuild_make_croparrays(videos, spots, out_dir=out_dir, out_ext=out_ext, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, tracker=tracker, xy_um_per_px=xy_um_per_px, z_um_per_plane=z_um_per_plane, keep_cols=keep_cols, xy_pad=xy_pad, z_pad=z_pad, dx=dx, dy=dy, dz=dz, dt=dt, units=units, date=date, as_object=as_object, skip_existing=skip_existing, progress=progress, notes=notes)
 
-    def open_measure_concat(self, groups, dims, labels=None, measure_kwargs=None, drop_vars=None, join='outer', attach_provenance=True):
-        """Open tracked croparrays, run measure_signal, and concatenate across nested groupings.
+    def open_measure_concat(self, groups, dims, labels=None, measure_kwargs=None, drop_vars=None, open_as='croparray', join='outer', attach_provenance=True):
+        """Open CropArray/TrackArray files, measure translation-site signal, optionally
+drop variables, and concatenate results into a single object.
 
-This is a high-level *workflow constructor* that hides the common boilerplate:
+This function is a convenience wrapper around file discovery, object opening,
+signal measurement, and concatenation. Each file is opened as either a
+``TrackArray`` or ``CropArray`` object, the signal is measured using
+``.measure_signal()``, optional variables are removed, and the resulting
+objects are concatenated.
 
-  open_as_trackarray → measure_signal → concat along dims (outer→inner)
+Processing order for each file
+------------------------------
+1. Open the file as a wrapper object (``TrackArray`` or ``CropArray``).
+2. Run ``.measure_signal(**measure_kwargs)``.
+3. Optionally remove variables listed in ``drop_vars``.
+4. Concatenate all objects along the requested dimensions.
+
+Importantly, variables are dropped **after** signal measurement so that
+measurement can access any required raw data (e.g., intensity stacks).
 
 Parameters
 ----------
-groups
-    A nested list structure whose depth equals len(dims). The leaf level must be
-    a list of file paths (str/Path). Example for dims=["rep","exp","fov"]:
+root : str or Path
+    Root directory containing CropArray/TrackArray files.
 
-        groups = [
-            [files_rep1_exp1, files_rep1_exp2],   # rep1: exp groups
-            [files_rep2_exp1, files_rep2_exp2],   # rep2
-        ]
+pattern : str, default="*.nc"
+    File pattern used to locate input files.
 
-    where each `files_repX_expY` is a list of .nc file paths (one per fov).
+recursive : bool, default=True
+    If True, search for files recursively within ``root``.
 
-dims
-    Grouping dimensions from outermost to innermost.
-    The final dim (dims[-1]) is used to concatenate the file list at each leaf
-    (e.g., "fov" or "cell").
+open_as : {"trackarray", "croparray"}, default="trackarray"
+    Determines how files are opened and which wrapper class is returned.
 
-labels
-    Optional labels per dimension (length must equal len(dims)).
-    Each entry can be:
-      - None: auto-label at that level
-          * leaf level: filename stems
-          * higher levels: f"{dim}{i}"
-      - list[str]: explicit labels for that level
+    - ``"trackarray"`` → files opened with ``open_as_trackarray()``
+    - ``"croparray"`` → files opened with ``open_croparray()``
 
-    Example: labels=[["rep1","rep2"], ["-ZNF598","+ZNF598"], None]
+measure_kwargs : dict or None, default=None
+    Keyword arguments passed to ``.measure_signal()``.
 
-measure_kwargs
-    Keyword args forwarded to `.measure_signal(**measure_kwargs)` for each file.
+drop_vars : sequence of str or None, default=None
+    Dataset variables to remove *after* signal measurement. This is useful
+    for removing large arrays (e.g., raw image stacks) to reduce memory
+    usage before concatenation.
 
-drop_vars
-    Passed to `ca.tools.open_as_trackarray(..., drop_vars=drop_vars)`.
+concat_dims : sequence of str or None, default=None
+    Dimensions along which concatenation should occur.
 
-join
-    Passed to concat at each level (often "outer" in your workflows).
-
-attach_provenance
-    If True, attaches JSON metadata to ds.attrs["provenance_json"].
+labels : sequence or None, default=None
+    Labels applied to concatenated dimensions (passed to the underlying
+    concat routine).
 
 Returns
 -------
-TrackArray
-    Concatenated TrackArray wrapper.
+TrackArray or CropArray
+    A concatenated wrapper object containing all processed datasets.
+    The returned type matches the value of ``open_as``.
 
 Notes
 -----
-- This function intentionally concatenates *hierarchically* to keep memory
-  reasonable and to mirror the experiment structure.
-- If you want different behavior at the leaf (e.g., leaf dim is "cell"),
-  just change dims[-1] and provide a corresponding leaf file list."""
-        return _impl_CropArrayBuild_open_measure_concat(groups=groups, dims=dims, labels=labels, measure_kwargs=measure_kwargs, drop_vars=drop_vars, join=join, attach_provenance=attach_provenance)
+• Each file is measured independently before concatenation.
+
+• Dropping variables after measurement can significantly reduce memory
+  footprint when concatenating many files.
+
+• The returned object preserves the wrapper API (TrackArray/CropArray),
+  allowing downstream methods such as ``.plot()``, ``.measure_signal()``,
+  and other accessor functions to remain available."""
+        return _impl_CropArrayBuild_open_measure_concat(groups=groups, dims=dims, labels=labels, measure_kwargs=measure_kwargs, drop_vars=drop_vars, open_as=open_as, join=join, attach_provenance=attach_provenance)
 
 
 CropArrayBuild.standardize_video_axes.__doc__ = _impl_CropArrayBuild_standardize_video_axes.__doc__

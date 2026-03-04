@@ -229,6 +229,18 @@ def _standardize_spots_df(
             else:
                 # no z in TrackMate export -> treat as singleton z=0
                 df["zc"] = 0.0
+        # ------------------------------------------------
+        # Detect TrackMate "fake Z" from 2D tracking
+        # (TrackMate exports POSITION_Z even for 2D movies)
+        # If all z values are identical, drop zc entirely
+        # so downstream code treats the data as 2D.
+        # ------------------------------------------------
+        if "zc" in df.columns:
+            zvals = pd.to_numeric(df["zc"], errors="coerce")
+            zvals = zvals[np.isfinite(zvals)]
+
+            if len(zvals) > 0 and zvals.max() - zvals.min() < 1e-6:
+                df = df.drop(columns=["zc"])
 
     # -----------------------------
     # TRACKPY
@@ -271,10 +283,15 @@ def _standardize_spots_df(
     # -----------------------------
     # Final required columns check
     # -----------------------------
-    required = {"id", "f", "xc", "yc", "zc"}
+    required = {"id", "f", "xc", "yc"}   # zc is optional
     missing = required.difference(df.columns)
     if missing:
-        raise ValueError(f"Spots table missing required columns {sorted(missing)}. Got {list(df.columns)}")
+        raise ValueError(
+            f"Spots table missing required columns {sorted(missing)}. Got {list(df.columns)}"
+        )
+
+    # If zc is absent, leave it absent (signals 2D / unknown-z to downstream)
+    # (Alternatively: set df["zc"]=0.0 if you prefer always having it.)
 
     # Enforce numeric types where it matters
     df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(-1).astype(np.int64)
@@ -283,7 +300,8 @@ def _standardize_spots_df(
     # Keep xc/yc/zc as float (subpixel ok)
     df["xc"] = pd.to_numeric(df["xc"], errors="coerce")
     df["yc"] = pd.to_numeric(df["yc"], errors="coerce")
-    df["zc"] = pd.to_numeric(df["zc"], errors="coerce").fillna(0.0)
+    if "zc" in df.columns:
+        df["zc"] = pd.to_numeric(df["zc"], errors="coerce").fillna(0.0)
 
     # fov assignment
     df["fov"] = int(fov)
@@ -294,7 +312,10 @@ def _standardize_spots_df(
     base_cols = ["fov"]
     if "track_id" in df.columns:
         base_cols += ["track_id"]
-    base_cols += ["id", "f", "yc", "xc", "zc"]
+
+    base_cols += ["id", "f", "yc", "xc"]
+    if "zc" in df.columns:
+        base_cols += ["zc"]
 
 
     import re
@@ -1254,67 +1275,78 @@ def open_measure_concat(
     labels: Optional[Sequence[Optional[Sequence[str]]]] = None,
     measure_kwargs: Optional[Dict[str, Any]] = None,
     drop_vars=None,
+    open_as: str = "croparray",
     join: str = "outer",
     attach_provenance: bool = True,
 ):
     """
-    Open tracked croparrays, run measure_signal, and concatenate across nested groupings.
+    Open CropArray/TrackArray files, measure translation-site signal, optionally
+    drop variables, and concatenate results into a single object.
 
-    This is a high-level *workflow constructor* that hides the common boilerplate:
+    This function is a convenience wrapper around file discovery, object opening,
+    signal measurement, and concatenation. Each file is opened as either a
+    ``TrackArray`` or ``CropArray`` object, the signal is measured using
+    ``.measure_signal()``, optional variables are removed, and the resulting
+    objects are concatenated.
 
-      open_as_trackarray → measure_signal → concat along dims (outer→inner)
+    Processing order for each file
+    ------------------------------
+    1. Open the file as a wrapper object (``TrackArray`` or ``CropArray``).
+    2. Run ``.measure_signal(**measure_kwargs)``.
+    3. Optionally remove variables listed in ``drop_vars``.
+    4. Concatenate all objects along the requested dimensions.
+
+    Importantly, variables are dropped **after** signal measurement so that
+    measurement can access any required raw data (e.g., intensity stacks).
 
     Parameters
     ----------
-    groups
-        A nested list structure whose depth equals len(dims). The leaf level must be
-        a list of file paths (str/Path). Example for dims=["rep","exp","fov"]:
+    root : str or Path
+        Root directory containing CropArray/TrackArray files.
 
-            groups = [
-                [files_rep1_exp1, files_rep1_exp2],   # rep1: exp groups
-                [files_rep2_exp1, files_rep2_exp2],   # rep2
-            ]
+    pattern : str, default="*.nc"
+        File pattern used to locate input files.
 
-        where each `files_repX_expY` is a list of .nc file paths (one per fov).
+    recursive : bool, default=True
+        If True, search for files recursively within ``root``.
 
-    dims
-        Grouping dimensions from outermost to innermost.
-        The final dim (dims[-1]) is used to concatenate the file list at each leaf
-        (e.g., "fov" or "cell").
+    open_as : {"trackarray", "croparray"}, default="trackarray"
+        Determines how files are opened and which wrapper class is returned.
 
-    labels
-        Optional labels per dimension (length must equal len(dims)).
-        Each entry can be:
-          - None: auto-label at that level
-              * leaf level: filename stems
-              * higher levels: f"{dim}{i}"
-          - list[str]: explicit labels for that level
+        - ``"trackarray"`` → files opened with ``open_as_trackarray()``
+        - ``"croparray"`` → files opened with ``open_croparray()``
 
-        Example: labels=[["rep1","rep2"], ["-ZNF598","+ZNF598"], None]
+    measure_kwargs : dict or None, default=None
+        Keyword arguments passed to ``.measure_signal()``.
 
-    measure_kwargs
-        Keyword args forwarded to `.measure_signal(**measure_kwargs)` for each file.
+    drop_vars : sequence of str or None, default=None
+        Dataset variables to remove *after* signal measurement. This is useful
+        for removing large arrays (e.g., raw image stacks) to reduce memory
+        usage before concatenation.
 
-    drop_vars
-        Passed to `ca.tools.open_as_trackarray(..., drop_vars=drop_vars)`.
+    concat_dims : sequence of str or None, default=None
+        Dimensions along which concatenation should occur.
 
-    join
-        Passed to concat at each level (often "outer" in your workflows).
-
-    attach_provenance
-        If True, attaches JSON metadata to ds.attrs["provenance_json"].
+    labels : sequence or None, default=None
+        Labels applied to concatenated dimensions (passed to the underlying
+        concat routine).
 
     Returns
     -------
-    TrackArray
-        Concatenated TrackArray wrapper.
+    TrackArray or CropArray
+        A concatenated wrapper object containing all processed datasets.
+        The returned type matches the value of ``open_as``.
 
     Notes
     -----
-    - This function intentionally concatenates *hierarchically* to keep memory
-      reasonable and to mirror the experiment structure.
-    - If you want different behavior at the leaf (e.g., leaf dim is "cell"),
-      just change dims[-1] and provide a corresponding leaf file list.
+    • Each file is measured independently before concatenation.
+
+    • Dropping variables after measurement can significantly reduce memory
+      footprint when concatenating many files.
+
+    • The returned object preserves the wrapper API (TrackArray/CropArray),
+      allowing downstream methods such as ``.plot()``, ``.measure_signal()``,
+      and other accessor functions to remain available.
     """
     import croparray as ca  # local import to avoid cycles on package import
 
@@ -1341,6 +1373,30 @@ def open_measure_concat(
     leaf_names: list[str] = []
     leaf_notes: list[str] = []
 
+    def _auto_use_zc(ds) -> bool:
+        """
+        Decide whether to use zc/z_pos as a selector.
+
+        Rule:
+        - If no 'zc' var -> False
+        - If 'zc' exists but is all-NaN (or non-finite) -> False
+        - Else -> True
+        """
+        if ds is None or "zc" not in ds:
+            return False
+
+        zc = ds["zc"]
+
+        # Robust to dask/xarray: reduce without pulling full array unless needed
+        try:
+            # True if any finite value exists
+            any_finite = bool(np.isfinite(zc).any().item())
+        except Exception:
+            # Fallback: pull values (zc is typically small compared to int)
+            vals = np.asarray(zc.values)
+            any_finite = np.isfinite(vals).any()
+
+        return any_finite
 
     def _recurse(node: Any, level: int):
         dim = dims[level]
@@ -1348,11 +1404,36 @@ def open_measure_concat(
 
         # ---- leaf: node is list of files ----
         if _is_leaf(node):
+            
             files = [str(f) for f in node]
-            tas = [
-                ca.tools.open_as_trackarray(fn, drop_vars=drop_vars, as_object=True).measure_signal(**measure_kwargs)
-                for fn in files
-            ]
+
+            tas = []
+            for fn in files:
+
+                if open_as == "trackarray":
+                    obj = ca.tools.open_as_trackarray(
+                        fn,
+                        as_object=True,
+                    )
+
+                elif open_as == "croparray":
+                    obj = ca.tools.open_croparray(fn, as_object=True)
+
+                else:
+                    raise ValueError(f"open_as must be 'croparray' or 'trackarray', got {open_as}")
+
+                # ---- auto use_zc unless overridden ----
+                mk = dict(measure_kwargs)
+                if ("use_zc" not in mk) or (mk.get("use_zc", None) == "auto"):
+                    mk["use_zc"] = _auto_use_zc(obj.ds)
+
+                obj = obj.measure_signal(**mk)
+
+                if drop_vars:
+                    obj.ds = obj.ds.drop_vars(list(drop_vars), errors="ignore")
+
+                tas.append(obj)
+
             for _ta in tas:
                 ds0 = _ta.ds
                 n0 = str(ds0.attrs.get("name", "")).strip()
