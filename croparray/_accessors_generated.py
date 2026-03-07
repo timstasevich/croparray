@@ -15,6 +15,7 @@ class _BaseAccessor:
         return self.parent.ds
 
 from croparray.plot import montage as _impl_CropArrayPlot_montage
+from croparray.plot import plot_croparray_crops as _impl_CropArrayPlot_plot_croparray_crops
 
 @dataclass
 class CropArrayPlot(_BaseAccessor):
@@ -62,10 +63,55 @@ xr.Dataset
     A reshaped dataset arranged in a montage."""
         return _impl_CropArrayPlot_montage(self.ds, col=col, row=row, **kwargs)
 
+    def plot_croparray_crops(self, layer='best_z', n=(0, 1, 1), t=(0, 1, 1), col='t', rolling=1, quantile_range=(0.02, 0.99), show_grayscale=True, show_merge_chs=None, ch=None, suppress_labels=True, show_suptitle=True):
+        """Plot CropArray crops for selected `n` and `t`.
+
+Parameters
+----------
+ds
+    CropArray-like dataset containing image crops.
+layer
+    Image layer to display, e.g. "best_z" or "int".
+n
+    Crop indices to display. Can be:
+      - scalar: 5
+      - list: [0, 2, 4]
+      - range tuple: (start, stop, step)
+t
+    Time indices to display. Can be:
+      - scalar: 5
+      - list: [0, 2, 4]
+      - range tuple: (start, stop, step)
+col
+    Facet dimension for plotting. Must be "t" or "n".
+rolling
+    Optional rolling mean along time before selecting `t`.
+quantile_range
+    Quantiles used for display normalization.
+show_grayscale
+    If True, show grayscale panels for each channel.
+show_merge_chs
+    Optional mapping (r_src, g_src, b_src) using positional channel indices.
+ch
+    If provided, show only this channel in grayscale and skip merge.
+suppress_labels
+    If True, remove titles, axis labels, and ticks from facet plots.
+show_suptitle
+    If True, add a suptitle above each plotted selection.
+
+Returns
+-------
+xr.DataArray
+    The normalized DataArray used for plotting."""
+        return _impl_CropArrayPlot_plot_croparray_crops(self.ds, layer=layer, n=n, t=t, col=col, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
+
 
 CropArrayPlot.montage.__doc__ = _impl_CropArrayPlot_montage.__doc__
 CropArrayPlot.montage.__wrapped__ = _impl_CropArrayPlot_montage
 CropArrayPlot.montage.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_montage).parameters.values())[1:])
+CropArrayPlot.plot_croparray_crops.__doc__ = _impl_CropArrayPlot_plot_croparray_crops.__doc__
+CropArrayPlot.plot_croparray_crops.__wrapped__ = _impl_CropArrayPlot_plot_croparray_crops
+CropArrayPlot.plot_croparray_crops.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_plot_croparray_crops).parameters.values())[1:])
 
 
 from croparray.measure import best_z_proj as _impl_CropArrayMeasure_best_z_proj
@@ -1197,6 +1243,7 @@ CropArrayIO.open_croparray_zarr.__signature__ = inspect.Signature(parameters=[in
 
 
 from croparray.plot import montage as _impl_TrackArrayPlot_montage
+from croparray.plot import plot_croparray_crops as _impl_TrackArrayPlot_plot_croparray_crops
 from croparray.trackarray.plot import plot_trackarray_crops as _impl_TrackArrayPlot_plot_trackarray_crops
 from croparray.trackarray.plot import plot_track_signal_traces as _impl_TrackArrayPlot_plot_track_signal_traces
 
@@ -1245,6 +1292,48 @@ Returns
 xr.Dataset
     A reshaped dataset arranged in a montage."""
         return _impl_TrackArrayPlot_montage(self.ds, col=col, row=row, **kwargs)
+
+    def plot_croparray_crops(self, layer='best_z', n=(0, 1, 1), t=(0, 1, 1), col='t', rolling=1, quantile_range=(0.02, 0.99), show_grayscale=True, show_merge_chs=None, ch=None, suppress_labels=True, show_suptitle=True):
+        """Plot CropArray crops for selected `n` and `t`.
+
+Parameters
+----------
+ds
+    CropArray-like dataset containing image crops.
+layer
+    Image layer to display, e.g. "best_z" or "int".
+n
+    Crop indices to display. Can be:
+      - scalar: 5
+      - list: [0, 2, 4]
+      - range tuple: (start, stop, step)
+t
+    Time indices to display. Can be:
+      - scalar: 5
+      - list: [0, 2, 4]
+      - range tuple: (start, stop, step)
+col
+    Facet dimension for plotting. Must be "t" or "n".
+rolling
+    Optional rolling mean along time before selecting `t`.
+quantile_range
+    Quantiles used for display normalization.
+show_grayscale
+    If True, show grayscale panels for each channel.
+show_merge_chs
+    Optional mapping (r_src, g_src, b_src) using positional channel indices.
+ch
+    If provided, show only this channel in grayscale and skip merge.
+suppress_labels
+    If True, remove titles, axis labels, and ticks from facet plots.
+show_suptitle
+    If True, add a suptitle above each plotted selection.
+
+Returns
+-------
+xr.DataArray
+    The normalized DataArray used for plotting."""
+        return _impl_TrackArrayPlot_plot_croparray_crops(self.ds, layer=layer, n=n, t=t, col=col, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
     def plot_trackarray_crops(self, layer='best_z', fov=0, track_ids=(1,), t=(0, 10, 3), rolling=1, quantile_range=(0.02, 0.99), show_grayscale=True, show_merge_chs=None, ch=None, suppress_labels=True, show_suptitle=True):
         """Plot track-centered image crops across time using xarray.plot.imshow.
@@ -1316,6 +1405,9 @@ None
 TrackArrayPlot.montage.__doc__ = _impl_TrackArrayPlot_montage.__doc__
 TrackArrayPlot.montage.__wrapped__ = _impl_TrackArrayPlot_montage
 TrackArrayPlot.montage.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_montage).parameters.values())[1:])
+TrackArrayPlot.plot_croparray_crops.__doc__ = _impl_TrackArrayPlot_plot_croparray_crops.__doc__
+TrackArrayPlot.plot_croparray_crops.__wrapped__ = _impl_TrackArrayPlot_plot_croparray_crops
+TrackArrayPlot.plot_croparray_crops.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_plot_croparray_crops).parameters.values())[1:])
 TrackArrayPlot.plot_trackarray_crops.__doc__ = _impl_TrackArrayPlot_plot_trackarray_crops.__doc__
 TrackArrayPlot.plot_trackarray_crops.__wrapped__ = _impl_TrackArrayPlot_plot_trackarray_crops
 TrackArrayPlot.plot_trackarray_crops.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_plot_trackarray_crops).parameters.values())[1:])

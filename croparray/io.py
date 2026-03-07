@@ -30,31 +30,39 @@ def _manual_filter_sidecar_paths(path_nc: str) -> list[str]:
     return sorted(str(x) for x in p.parent.glob(pattern))
 
 def _merge_manual_filter_sidecars_crop(ds: xr.Dataset, path_nc: str) -> xr.Dataset:
-    """Merge only sidecars that look like CropArray-space filters (no 'track_id' dim)."""
+    """Merge manual filter sidecars into a CropArray dataset."""
     sidecars = _manual_filter_sidecar_paths(path_nc)
+
     if not sidecars:
+        print("[CropArray] No sidecars found.")
         return ds
 
+    print(f"[CropArray] Found {len(sidecars)} sidecar(s).")
+
     to_merge: list[xr.Dataset] = [ds]
+
     for sc in sidecars:
+        print(f"[CropArray] Checking sidecar: {sc}")
+
         try:
             with xr.open_dataset(sc) as _tmp:
                 ds_sc = _tmp.load()
-        except Exception:
-            continue
-
-        # Skip track-space sidecars here (prevents track_id coord/noncoord ambiguity)
-        if "track_id" in ds_sc.dims:
+        except Exception as e:
+            print(f"[CropArray] Failed to load {sc}: {e}")
             continue
 
         if len(ds_sc.data_vars) == 0:
+            print(f"[CropArray] Skipping {sc} (no data variables).")
             continue
 
+        print(f"[CropArray] Merging sidecar {sc} with vars: {list(ds_sc.data_vars)}")
         to_merge.append(ds_sc)
 
     if len(to_merge) == 1:
+        print("[CropArray] No valid sidecars merged.")
         return ds
 
+    print("[CropArray] Merging sidecars into CropArray dataset.")
     return xr.merge(to_merge, compat="override", join="outer")
 
 def _merge_manual_filter_sidecars_track(ds: xr.Dataset, path_nc: str) -> xr.Dataset:
@@ -421,10 +429,10 @@ def save_croparray(
     # Ensure filename is just a name, not a path
     filename = os.path.basename(filename)
 
-    # Append ext if user provided a stem without suffix
-    if not Path(filename).suffix:
+    # Always ensure filename ends with ext
+    if not filename.lower().endswith(ext.lower()):
         filename = filename + ext
-
+        
     out_path = out_dir / filename
 
     if out_path.exists() and not overwrite:

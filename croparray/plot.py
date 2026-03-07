@@ -13,8 +13,127 @@ import xarray as xr
 from typing import Any, Sequence
 import pandas as pd
 
-__all__ = ["montage"]
+__all__ = ["montage", "plot_croparray_crops"]
 
+
+_EPS = 1e-9
+
+def _as_range_list(v):
+    """
+    Convert scalar / sequence / (start, stop, step) tuple into a list of ints.
+    """
+    if isinstance(v, tuple) and len(v) == 3:
+        start, stop, step = v
+        return list(range(start, stop, step))
+    elif isinstance(v, (list, np.ndarray)):
+        return list(map(int, v))
+    else:
+        return [int(v)]
+
+def _is_binary_like(a: xr.DataArray, max_check: int = 1_000_000) -> bool:
+    """
+    Heuristic test for whether an array is a mask-like layer.
+
+    Returns True for:
+    - dtype=bool
+    - values that appear restricted to {0, 1} or {0, 1, 255} (with optional NaNs)
+
+    Notes
+    -----
+    We sample up to `max_check` values to avoid scanning very large arrays.
+    """
+    if a.dtype == bool:
+        return True
+
+    arr = np.asarray(a.data) if hasattr(a, "data") else np.asarray(a.values)
+    flat = arr.ravel()
+    if flat.size == 0:
+        return False
+
+    if flat.size > max_check:
+        step = int(np.ceil(flat.size / max_check))
+        flat = flat[::step]
+
+    if np.issubdtype(flat.dtype, np.floating):
+        flat = flat[~np.isnan(flat)]
+        if flat.size == 0:
+            return False
+
+    u = np.unique(flat)
+    return set(u.tolist()).issubset({0, 1, 255})
+
+def _normalize_for_display(
+    a: xr.DataArray,
+    *,
+    quantile_range: Tuple[float, float] = (0.02, 0.99),
+) -> xr.DataArray:
+    """
+    Normalize image-like data into [0, 1] for display.
+
+    Rules
+    -----
+    - Binary-like masks -> convert to float and display in [0, 1]
+      (255 is treated as 1).
+    - Otherwise -> quantile-normalize using positive pixels only.
+
+    Parameters
+    ----------
+    a
+        Array to normalize.
+    quantile_range
+        Quantiles (low, high) for normalization, computed from positive pixels only.
+
+    Returns
+    -------
+    xr.DataArray
+        Normalized array in [0, 1].
+    """
+    if _is_binary_like(a):
+        out = a.astype(float)
+        out = xr.where(out == 255, 1.0, out).clip(0, 1)
+        return out
+
+    pos = a.where(lambda x: x > 0)
+    if int(pos.count()) == 0:
+        q0, q1 = 0.0, 1.0
+    else:
+        q0 = pos.quantile(quantile_range[0])
+        q1 = pos.quantile(quantile_range[1])
+
+    out = ((a - q0) / (q1 - q0 + _EPS)).clip(0, 1)
+    return out
+
+def _facetgrid_cleanup(g, *, suppress_labels: bool, suptitle: Optional[str]) -> None:
+    """
+    Best-effort cleanup for xarray FacetGrid outputs.
+    """
+    if suppress_labels:
+        try:
+            g.set_titles("")
+        except Exception:
+            try:
+                g.set_titles(template="")
+            except Exception:
+                pass
+        try:
+            g.set_xlabels("")
+            g.set_ylabels("")
+        except Exception:
+            pass
+        try:
+            # remove ticks if present
+            for ax in getattr(g, "axes", np.array([])).ravel():
+                if ax is not None:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+        except Exception:
+            pass
+
+    if suptitle and hasattr(g, "fig") and g.fig is not None:
+        try:
+            g.fig.suptitle(suptitle, y=1.02)
+        except Exception:
+            pass
 
 def montage(ds: xr.Dataset, *, col: str = "t", row: str = "n", **kwargs) -> xr.Dataset:
     """
@@ -228,7 +347,6 @@ def relplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = Non
     df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
     return sns.relplot(data=df, **kwargs)
 
-
 def displot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
     """
     Seaborn displot with data auto-built from ds via variables_to_df.
@@ -237,7 +355,6 @@ def displot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = Non
     df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
     return sns.displot(data=df, **kwargs)
 
-
 def catplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
     """
     Seaborn catplot with data auto-built from ds via variables_to_df.
@@ -245,3 +362,219 @@ def catplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = Non
     import seaborn as sns
     df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
     return sns.catplot(data=df, **kwargs)
+
+
+def plot_croparray_crops(
+    ds: xr.Dataset,
+    *,
+    layer: str = "best_z",
+    n: Union[int, Sequence[int], np.ndarray, Tuple[int, int, int]] = (0, 1, 1),
+    t: Union[int, Sequence[int], np.ndarray, Tuple[int, int, int]] = (0, 1, 1),
+    col: str = "t",
+    rolling: int = 1,
+    quantile_range: Tuple[float, float] = (0.02, 0.99),
+    # Display
+    show_grayscale: bool = True,
+    show_merge_chs: Optional[Tuple[int, int, int]] = None,
+    ch: Optional[int] = None,
+    # Presentation
+    suppress_labels: bool = True,
+    show_suptitle: bool = True,
+) -> xr.DataArray:
+    """
+    Plot CropArray crops for selected `n` and `t`.
+
+    Parameters
+    ----------
+    ds
+        CropArray-like dataset containing image crops.
+    layer
+        Image layer to display, e.g. "best_z" or "int".
+    n
+        Crop indices to display. Can be:
+          - scalar: 5
+          - list: [0, 2, 4]
+          - range tuple: (start, stop, step)
+    t
+        Time indices to display. Can be:
+          - scalar: 5
+          - list: [0, 2, 4]
+          - range tuple: (start, stop, step)
+    col
+        Facet dimension for plotting. Must be "t" or "n".
+    rolling
+        Optional rolling mean along time before selecting `t`.
+    quantile_range
+        Quantiles used for display normalization.
+    show_grayscale
+        If True, show grayscale panels for each channel.
+    show_merge_chs
+        Optional mapping (r_src, g_src, b_src) using positional channel indices.
+    ch
+        If provided, show only this channel in grayscale and skip merge.
+    suppress_labels
+        If True, remove titles, axis labels, and ticks from facet plots.
+    show_suptitle
+        If True, add a suptitle above each plotted selection.
+
+    Returns
+    -------
+    xr.DataArray
+        The normalized DataArray used for plotting.
+    """
+    if layer not in ds:
+        raise KeyError(f"Dataset must contain layer {layer!r}. Available: {list(ds.data_vars)}")
+
+    if col not in ("t", "n"):
+        raise ValueError(f"col must be 't' or 'n', got {col!r}")
+
+    da = ds[layer]
+    for req in ("t", "y", "x"):
+        if req not in da.dims:
+            raise ValueError(f"Layer {layer!r} must include dim {req!r}. Found dims: {da.dims}")
+
+    n_list = _as_range_list(n)
+    t_list = _as_range_list(t)
+
+    if "n" not in da.dims:
+        raise ValueError(f"Layer {layer!r} must include dim 'n'. Found dims: {da.dims}")
+
+    bz = da.sel(n=n_list)
+
+    if rolling and rolling > 1:
+        bz = bz.rolling(t=rolling, center=True, min_periods=1).mean()
+
+    bz = bz.isel(t=t_list)
+
+    other_facet = "n" if col == "t" else "t"
+
+    # keep dimensions in a predictable order
+    desired_order = [d for d in ("n", "t", "y", "x", "ch") if d in bz.dims]
+    bz = bz.transpose(*desired_order)
+
+    # ---- No channel dimension ----
+    if "ch" not in bz.dims:
+        normed = _normalize_for_display(
+            bz.transpose("n", "t", "y", "x"),
+            quantile_range=quantile_range,
+        )
+
+        g = normed.plot.imshow(
+            col=col,
+            row=other_facet,
+            cmap="gray",
+            aspect=1,
+            size=3,
+            vmin=0,
+            vmax=1,
+            robust=False,
+            add_labels=not suppress_labels,
+            add_colorbar=False,
+        )
+
+        if show_suptitle:
+            _facetgrid_cleanup(
+                g,
+                suppress_labels=suppress_labels,
+                suptitle=f"{layer}",
+            )
+
+        return normed
+
+    # ---- Single-channel override ----
+    if ch is not None:
+        normed = _normalize_for_display(
+            bz.isel(ch=int(ch)).transpose("n", "t", "y", "x"),
+            quantile_range=quantile_range,
+        )
+
+        g = normed.plot.imshow(
+            col=col,
+            row=other_facet,
+            cmap="gray",
+            aspect=1,
+            size=3,
+            vmin=0,
+            vmax=1,
+            robust=False,
+            add_labels=not suppress_labels,
+            add_colorbar=False,
+        )
+
+        if show_suptitle:
+            _facetgrid_cleanup(
+                g,
+                suppress_labels=suppress_labels,
+                suptitle=f"{layer} | ch={int(ch)}",
+            )
+
+        return normed
+
+    # ---- Normalize each channel separately ----
+    n_ch = int(bz.sizes["ch"])
+    ch_normed = [
+        _normalize_for_display(
+            bz.isel(ch=i).transpose("n", "t", "y", "x"),
+            quantile_range=quantile_range,
+        )
+        for i in range(n_ch)
+    ]
+    normed_all = xr.concat(ch_normed, dim="ch").assign_coords(ch=bz["ch"].values)
+
+    # ---- Grayscale panels ----
+    if show_grayscale:
+        for i in range(n_ch):
+            g = normed_all.isel(ch=i).plot.imshow(
+                col=col,
+                row=other_facet,
+                cmap="gray",
+                aspect=1,
+                size=3,
+                vmin=0,
+                vmax=1,
+                robust=False,
+                add_labels=not suppress_labels,
+                add_colorbar=False,
+            )
+            if show_suptitle:
+                _facetgrid_cleanup(
+                    g,
+                    suppress_labels=suppress_labels,
+                    suptitle=f"{layer} | ch={i}",
+                )
+
+    # ---- Optional RGB merge ----
+    if show_merge_chs is not None:
+        r_src, g_src, b_src = map(int, show_merge_chs)
+        need_max = max(r_src, g_src, b_src)
+        if n_ch <= need_max:
+            raise ValueError(
+                f"show_merge_chs={show_merge_chs} requires at least {need_max + 1} channels, "
+                f"but dataset has {n_ch}."
+            )
+
+        r_da = normed_all.isel(ch=r_src).expand_dims(rgb=["R"])
+        g_da = normed_all.isel(ch=g_src).expand_dims(rgb=["G"])
+        b_da = normed_all.isel(ch=b_src).expand_dims(rgb=["B"])
+        rgb_da = xr.concat([r_da, g_da, b_da], dim="rgb")
+
+        g = rgb_da.plot.imshow(
+            col=col,
+            row=other_facet,
+            rgb="rgb",
+            aspect=1,
+            size=3,
+            vmin=0,
+            vmax=1,
+            add_labels=not suppress_labels,
+            add_colorbar=False,
+        )
+
+        if show_suptitle:
+            _facetgrid_cleanup(
+                g,
+                suppress_labels=suppress_labels,
+                suptitle=f"{layer} | MERGE {tuple(show_merge_chs)}",
+            )
+
+    return normed_all

@@ -565,22 +565,17 @@ def montage_viewer(
         # Build label grid (MR x MC) as strings
         labels_2d = np.empty((Mrow, Mcol), dtype=object)
 
-        # Prefer montage identity dim from the source object:
-        # TrackArray: typically has 'track_id'
-        # CropArray: typically has 'n'
-        tile_dim = _infer_tile_dim(ca_or_ta)
-
-        if square and row == col == tile_dim and (tile_dim in ca_or_ta.dims):
-            # Square-packed tile_dim x tile_dim (e.g. track_id or n)
-            n_tiles = int(ca_or_ta.sizes[tile_dim])
+        if square and row == col == "track_id" and ("track_id" in ca_or_ta.dims):
+            # Square-packed track_id x track_id
+            n_tiles = int(ca_or_ta.sizes["track_id"])
             S = int(np.ceil(np.sqrt(n_tiles)))
-            tile_vals = np.asarray(ca_or_ta.coords[tile_dim].values)
+            track_vals = np.asarray(ca_or_ta.coords["track_id"].values)
 
             for mr in range(Mrow):
                 for mc in range(Mcol):
                     k = mr * S + mc
                     if 0 <= k < n_tiles:
-                        v = tile_vals[k]
+                        v = track_vals[k]
                         try:
                             v = v.item()
                         except Exception:
@@ -1757,7 +1752,7 @@ def manual_filter_montage(
                 tile_i_list: list[int] = []
                 mc_list: list[int] = []
                 for mc2 in range(int(mc), int(Mcol)):
-                    tid = _tile_val_orig_from_grid(mr=mr, mc=mc2)  # square-packed tile id
+                    tid = _track_id_orig_from_grid(mr=mr, mc=mc2)  # <-- key fix
                     if tid is None:
                         continue
                     if tid not in tile_to_i:
@@ -1872,32 +1867,28 @@ def manual_filter_montage(
         except Exception:
             return None
 
-    def _tile_val_orig_from_grid(*, mr: int, mc: int):
-        """Undo square-packing for row==col==tile_dim montages.
+    def _track_id_orig_from_grid(*, mr: int, mc: int):
+        """
+        Undo square-packing for row==col=='track_id' montages.
 
-        Returns the *true* ds coordinate value along `tile_dim` for the tile at (mr, mc),
+        Returns the *true* ds track_id coord value for the tile at (mr, mc),
         or None if that tile is padding/out of range.
-
-        Notes
-        -----
-        - TrackArray square montage: tile_dim is typically 'track_id'
-        - CropArray square montage: tile_dim is typically 'n'
         """
         if row != col:
             return None
-        if row != tile_dim:
+        if row != "track_id":
             return None
-        if tile_dim not in ds.dims:
+        if "track_id" not in ds.dims:
             return None
 
-        n_tiles = int(ds.sizes[tile_dim])
+        n_tiles = int(ds.sizes["track_id"])
         S = int(np.ceil(np.sqrt(n_tiles)))
         k = int(mr) * S + int(mc)
 
         if k < 0 or k >= n_tiles:
             return None
 
-        v = ds.coords[tile_dim].values[k]
+        v = ds.coords["track_id"].values[k]
         try:
             return v.item()
         except Exception:
@@ -1977,24 +1968,21 @@ def manual_filter_montage(
             t_idx_for_table = int(np.clip(t_idx_for_table, 0, max(0, T - 1)))
             t_idx_for_pixels = None  # rectangular overlay is (r,c)
 
-        # ---- Determine tile identity (tile_val) and a canonical id for debug ----
-        track_id_orig = None  # kept name for backwards-compatible click-info display
+        # ---- Determine tile identity (tile_val) and a canonical track_id for debug ----
+        track_id_orig = None
 
-        if square and (row == col == tile_dim):
-            # Square-packed tile grid: map (mr,mc) -> original tile coordinate value
-            track_id_orig = _tile_val_orig_from_grid(mr=mr, mc=mc)
+        if square and (row == col == "track_id"):
+            # YOUR intended mapping: track_id = ds.track_id[k] where k = mr*S + mc
+            track_id_orig = _track_id_orig_from_grid(mr=mr, mc=mc)
             if track_id_orig is None:
                 yield
                 return
             tile_val = track_id_orig
         else:
-            # Rectangular montages: if row is the tile identity dim, row_val IS the tile id.
-            if (not square) and (row == tile_dim):
-                try:
-                    tile_val = int(row_val)
-                except Exception:
-                    tile_val = row_val
-                track_id_orig = tile_val
+            # For rectangular track_id×t montages, row_val is the track_id coord value
+            if (not square) and (row == "track_id"):
+                track_id_orig = int(row_val)
+                tile_val = track_id_orig
             else:
                 # Generic fallback: use tile_id_grid if present
                 if tile_id_grid is None:
@@ -2013,10 +2001,6 @@ def manual_filter_montage(
                 return
         except Exception:
             pass
-
-        # ---- Editing rules ----
-        # - Shift+click: toggle a run across the montage row (square) or a run across montage cols (rect)
-        # - Alt+click: toggle a single tile, BUT only for square montages (your preference)
 
         # ---- Require a modifier for editing; plain click is navigation ----
         if not (shift_down or alt_down):
