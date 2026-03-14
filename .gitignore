@@ -12,3 +12,5 @@ croparray.egg-info
 
 # Sphinx build artifacts
 docs/_build/
+
+notebooks/Translation_Stalling_Quantification.ipynb

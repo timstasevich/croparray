@@ -11,7 +11,7 @@ __version__ = "0.0.9"
 # Object-oriented API
 from .crop_array_object import CropArray
 from .crop_array_tools import concat
-
+from .video import Color_Z_Depth, show_rgb_frame, save_rgb_gif, save_rgb_tiff, add_z_legend_bar_labeled,  plot_multichannel_plane_montage
 
 # Functional / tools API (explicitly attached)
 from . import crop_array_tools

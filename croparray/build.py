@@ -1444,20 +1444,53 @@ def open_measure_concat(
                 if note0:
                     leaf_notes.append(note0)
 
-
             leaf_labels = lvl_labels if lvl_labels is not None else _default_leaf_labels(files)
 
-            out = ca.concat(cas=tas, dim=dim, labels=leaf_labels, join=join)
+            # ----------------------------------------------------------
+            # Special handling for file-level concatenation along fov:
+            # use integer fov indices for alignment, but preserve the
+            # human-readable file stems in a separate coordinate fov_name.
+            # ----------------------------------------------------------
+            if dim == "fov":
+                fov_names = list(leaf_labels)
+                fov_index = list(range(len(tas) ))  # 0, 1, 2, 3, ...
 
-            prov.append(
-                dict(
-                    dim=dim,
-                    level=level,
-                    labels=list(leaf_labels),
-                    directories=sorted({str(Path(f).parent) for f in files}),
-                    files=[Path(f).name for f in files],
+                out = ca.concat(cas=tas, dim=dim, labels=fov_index, join=join)
+
+                # Save original labels as a regular data variable on fov
+                # (not a coordinate), so outer concatenations promote it to
+                # (exp, fov), (rep, exp, fov), etc.
+                if "fov_name" in out.ds.coords:
+                    out.ds = out.ds.reset_coords("fov_name", drop=False)
+
+                out.ds["fov_name"] = xr.DataArray(
+                    np.asarray(fov_names, dtype=str),
+                    dims=("fov",),
                 )
-            )
+
+                prov.append(
+                    dict(
+                        dim=dim,
+                        level=level,
+                        labels=list(fov_index),
+                        fov_names=list(fov_names),
+                        directories=sorted({str(Path(f).parent) for f in files}),
+                        files=[Path(f).name for f in files],
+                    )
+                )
+            else:
+                out = ca.concat(cas=tas, dim=dim, labels=leaf_labels, join=join)
+
+                prov.append(
+                    dict(
+                        dim=dim,
+                        level=level,
+                        labels=list(leaf_labels),
+                        directories=sorted({str(Path(f).parent) for f in files}),
+                        files=[Path(f).name for f in files],
+                    )
+                )
+
             return out
 
         # ---- non-leaf: list of subgroups ----
