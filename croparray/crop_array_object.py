@@ -1,4 +1,6 @@
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 import xarray as xr
@@ -268,6 +270,92 @@ class CropArray:
             memory=memory,
         )
     
+    def decompose_crops(
+        self,
+        voxel_size,
+        *,
+        reference_spot=None,
+        spot_radius=None,
+        sigma_yx=None,
+        sigma_z=None,
+        amplitude=None,
+        background=None,
+        channel: int = 0,
+        source: str = "int",
+        z_select = "best",
+        denoise = False,
+        limit_gaussian: int = 1000,
+        progress: bool = True,
+    ):
+        """
+        Decompose clustered spots in each crop using gaussian mixture fitting.
+
+        Gaussian parameters can be provided in two ways:
+
+        1. **From a reference spot**: pass ``reference_spot`` and ``spot_radius``.
+        2. **Directly**: pass ``sigma_yx``, ``amplitude``, ``background``
+           (and ``sigma_z`` for 3D).
+
+        Parameters
+        ----------
+        voxel_size : tuple of float
+            Voxel size in nm: (y, x) for 2D or (z, y, x) for 3D.
+        reference_spot : np.ndarray, optional
+            A 2D or 3D diffraction-limited reference spot.
+        spot_radius : tuple of float, optional
+            Spot radius in nm. Required with ``reference_spot``.
+        sigma_yx : float, optional
+            Gaussian std dev in yx plane (nm).
+        sigma_z : float, optional
+            Gaussian std dev along z (nm, 3D only).
+        amplitude : float, optional
+            Gaussian amplitude.
+        background : float, optional
+            Background value.
+        channel : int, default 0
+            Channel index to decompose.
+        source : str, default "int"
+            Intensity variable name in the dataset.
+        z_select : int, "best", or None, default "best"
+            Z-slice selection for 2D decomposition. "best" uses best-z
+            from ``zc``, int uses fixed z-index, None uses z=0.
+        denoise : bool or int, default False
+            Apply median filter before decomposition. True uses 3×3,
+            int uses that as filter size.
+        limit_gaussian : int, default 1000
+            Maximum gaussians to fit per crop.
+        progress : bool, default True
+            Show progress bar.
+
+        Returns
+        -------
+        df_molecules : pd.DataFrame
+            Positions of all decomposed molecules with columns
+            (fov, n, t, mol_idx, y_px, x_px) or (fov, n, t, mol_idx, z_px, y_px, x_px).
+            ``n_molecules``, ``spot_length``, and ``decompose_map`` are
+            added to the dataset in place.
+        """
+        from .crop_ops.decompose import decompose_crops
+        ds, df = decompose_crops(
+            self.ds,
+            voxel_size=voxel_size,
+            reference_spot=reference_spot,
+            spot_radius=spot_radius,
+            sigma_yx=sigma_yx,
+            sigma_z=sigma_z,
+            amplitude=amplitude,
+            background=background,
+            channel=channel,
+            source=source,
+            z_select=z_select,
+            denoise=denoise,
+            limit_gaussian=limit_gaussian,
+            add_to_ds=True,
+            progress=progress,
+        )
+        self.ds = ds
+        return df
+
     # -----------------------------
     # xarray passthrough helpers
     # -----------------------------
