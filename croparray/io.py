@@ -34,7 +34,7 @@ def _merge_manual_filter_sidecars_crop(ds: xr.Dataset, path_nc: str) -> xr.Datas
     sidecars = _manual_filter_sidecar_paths(path_nc)
 
     if not sidecars:
-        print("[CropArray] No sidecars found.")
+        #print("[CropArray] No sidecars found.")
         return ds
 
     print(f"[CropArray] Found {len(sidecars)} sidecar(s).")

@@ -1414,6 +1414,7 @@ def open_measure_concat(
                     obj = ca.tools.open_as_trackarray(
                         fn,
                         as_object=True,
+                        drop_vars=None,
                     )
 
                 elif open_as == "croparray":

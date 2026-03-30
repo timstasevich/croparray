@@ -190,7 +190,9 @@ def track_array(
     )
 
     mi = pd.MultiIndex.from_tuples(keys, names=split_dims)
-    out_tracks = out_tracks.assign_coords({stack_dim: mi})
+    mindex_coords = xr.Coordinates.from_pandas_multiindex(mi, stack_dim)
+    out_tracks = out_tracks.assign_coords(mindex_coords)
+
     out_tracks = out_tracks.unstack(stack_dim)
 
     # -----------------------------
@@ -240,7 +242,9 @@ def track_array(
                 meta_ds_vars[name] = tmp
 
     out_meta = xr.Dataset(meta_ds_vars)
-    out_meta = out_meta.assign_coords({stack_dim: mi})
+    mindex_coords = xr.Coordinates.from_pandas_multiindex(mi, stack_dim)
+    out_meta = out_meta.assign_coords(mindex_coords)
+
     out_meta = out_meta.unstack(stack_dim)
 
     # Merge tracked variables + metadata
