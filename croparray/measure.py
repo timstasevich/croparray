@@ -58,14 +58,15 @@ def best_z_proj(
         Best-z image with dims like (fov,n,t,y,x,ch).
     """
     res = ca.dx  # used to convert pixel radius to coordinate units (matches your existing convention)
-
+        
     def _rolled_ch(ch_idx):
-        return ca.int.sel(ch=ch_idx).rolling(z=roll_n, center=True, min_periods=1).max()
-
+        out = ca.int.sel(ch=ch_idx).rolling(z=roll_n, center=True, min_periods=1).max()
+        return out.expand_dims(ch=[ch_idx])    
+    
     def _isel_z_or_zero(da_z, z_index_da):
         """
         Vectorized selection along z with:
-          - invalid (z_index == -1 or out of range) -> zeros
+        - invalid (z_index == -1 or out of range) -> zeros
         """
         z_len = da_z.sizes["z"]
 
@@ -75,6 +76,11 @@ def best_z_proj(
             dask="allowed",
             output_dtypes=[np.int64],
         )
+
+        # If the indexer carries a scalar/channel coordinate, drop it so it
+        # doesn't conflict with da_z, which now has a real length-1 ch dim.
+        if "ch" in z_index.coords and "ch" not in z_index.dims:
+            z_index = z_index.drop_vars("ch")
 
         valid = (z_index >= 0) & (z_index < z_len)
         z_safe = z_index.where(valid, 0)
@@ -141,7 +147,7 @@ def best_z_proj(
             z_index = sel_da.sel(ch=ch_idx) if "ch" in sel_da.dims else sel_da
             out_per_ch.append(_isel_z_or_zero(_rolled_ch(ch_idx), z_index))
 
-        return xr.concat(out_per_ch, dim="ch").assign_coords(ch=ca.ch.values)
+        return xr.concat(out_per_ch, dim="ch")
 
     # -----------------------------------
     # Mode A: compute best-z (store as z_pos_best; do NOT overwrite global zc)
@@ -158,13 +164,20 @@ def best_z_proj(
                 .rolling(z=roll_n, center=True, min_periods=1)
                 .max()
             )
-            z_pos_best = z_sig.argmax(dim="z").astype(np.int16)
+#            z_pos_best = z_sig.argmax(dim="z").astype(np.int16)
+            valid = z_sig.notnull().any(dim="z")
+            z_pos_best = z_sig.fillna(-np.inf).argmax(dim="z").astype(np.int16)
+            z_pos_best = z_pos_best.where(valid, -1).astype(np.int16)
             z_pos_best_list.append(z_pos_best)
             out_list.append(_isel_z_or_zero(_rolled_ch(ch_idx), z_pos_best))
 
-        out = xr.concat(out_list, dim="ch").assign_coords(ch=ca.ch.values)
+        out = xr.concat(out_list, dim="ch")
 
-        ca["z_pos_best"] = xr.concat(z_pos_best_list, dim="ch").assign_coords(ch=ca.ch.values)
+        ca["z_pos_best"] = xr.concat(
+            [zp.expand_dims(ch=[ch_idx]) for zp, ch_idx in zip(z_pos_best_list, ca.ch.values)],
+            dim="ch",
+        )
+
         ca["z_pos_best"].attrs["units"] = "index"
         ca["z_pos_best"].attrs["long_name"] = "best z (local index into stored z) per channel"
 
@@ -180,13 +193,15 @@ def best_z_proj(
             .rolling(z=roll_n, center=True, min_periods=1)
             .max()
         )
-        z_pos_best = z_sig.argmax(dim="z").astype(np.int16)
+#        z_pos_best = z_sig.argmax(dim="z").astype(np.int16)
+        valid = z_sig.notnull().any(dim="z")
+        z_pos_best = z_sig.fillna(-np.inf).argmax(dim="z").astype(np.int16)
+        z_pos_best = z_pos_best.where(valid, -1).astype(np.int16)
 
         out = xr.concat(
             [_isel_z_or_zero(_rolled_ch(ch_idx), z_pos_best) for ch_idx in ca.ch.values],
             dim="ch",
-        ).assign_coords(ch=ca.ch.values)
-
+        )
         ca["z_pos_best"] = z_pos_best
         ca["z_pos_best"].attrs["units"] = "index"
         ca["z_pos_best"].attrs["long_name"] = "best z (local index into stored z)"
