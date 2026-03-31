@@ -2103,23 +2103,66 @@ TrackArrayNapari.display_cell_and_tracks.__signature__ = inspect.Signature(param
 
 
 def install_generated_accessors(CropArray, TrackArray):
-    """Attach generated accessors as @property on wrapper classes."""
+    """Attach generated accessors as typed @property on wrapper classes."""
     # CropArray accessors
-    CropArray.plot = property(lambda self, _A=CropArrayPlot: _A(self))
-    CropArray.measure = property(lambda self, _A=CropArrayMeasure: _A(self))
-    CropArray.df = property(lambda self, _A=CropArrayDF: _A(self))
-    CropArray.view = property(lambda self, _A=CropArrayView: _A(self))
-    CropArray.track = property(lambda self, _A=CropArrayTrack: _A(self))
-    CropArray.ops = property(lambda self, _A=CropArrayOps: _A(self))
-    CropArray.napari = property(lambda self, _A=CropArrayNapari: _A(self))
-    CropArray.build = property(lambda self, _A=CropArrayBuild: _A(self))
-    CropArray.io = property(lambda self, _A=CropArrayIO: _A(self))
+    def _get_plot(self) -> CropArrayPlot:
+        return CropArrayPlot(self)
+    CropArray.plot = property(_get_plot)
+
+    def _get_measure(self) -> CropArrayMeasure:
+        return CropArrayMeasure(self)
+    CropArray.measure = property(_get_measure)
+
+    def _get_df(self) -> CropArrayDF:
+        return CropArrayDF(self)
+    CropArray.df = property(_get_df)
+
+    def _get_view(self) -> CropArrayView:
+        return CropArrayView(self)
+    CropArray.view = property(_get_view)
+
+    def _get_track(self) -> CropArrayTrack:
+        return CropArrayTrack(self)
+    CropArray.track = property(_get_track)
+
+    def _get_ops(self) -> CropArrayOps:
+        return CropArrayOps(self)
+    CropArray.ops = property(_get_ops)
+
+    def _get_napari(self) -> CropArrayNapari:
+        return CropArrayNapari(self)
+    CropArray.napari = property(_get_napari)
+
+    def _get_build(self) -> CropArrayBuild:
+        return CropArrayBuild(self)
+    CropArray.build = property(_get_build)
+
+    def _get_io(self) -> CropArrayIO:
+        return CropArrayIO(self)
+    CropArray.io = property(_get_io)
 
     # TrackArray accessors
-    TrackArray.tplot = property(lambda self, _A=TrackArrayPlot: _A(self))
-    TrackArray.tmeasure = property(lambda self, _A=TrackArrayMeasure: _A(self))
-    TrackArray.tview = property(lambda self, _A=TrackArrayView: _A(self))
-    TrackArray.tdf = property(lambda self, _A=TrackArrayDF: _A(self))
-    TrackArray.ops = property(lambda self, _A=TrackArrayOps: _A(self))
-    TrackArray.napari = property(lambda self, _A=TrackArrayNapari: _A(self))
+    def _get_tplot(self) -> TrackArrayPlot:
+        return TrackArrayPlot(self)
+    TrackArray.tplot = property(_get_tplot)
+
+    def _get_tmeasure(self) -> TrackArrayMeasure:
+        return TrackArrayMeasure(self)
+    TrackArray.tmeasure = property(_get_tmeasure)
+
+    def _get_tview(self) -> TrackArrayView:
+        return TrackArrayView(self)
+    TrackArray.tview = property(_get_tview)
+
+    def _get_tdf(self) -> TrackArrayDF:
+        return TrackArrayDF(self)
+    TrackArray.tdf = property(_get_tdf)
+
+    def _get_ops(self) -> TrackArrayOps:
+        return TrackArrayOps(self)
+    TrackArray.ops = property(_get_ops)
+
+    def _get_napari(self) -> TrackArrayNapari:
+        return TrackArrayNapari(self)
+    TrackArray.napari = property(_get_napari)
 

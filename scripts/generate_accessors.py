@@ -332,17 +332,27 @@ def generate() -> None:
     # Installer
     lines.append("")
     lines.append("def install_generated_accessors(CropArray, TrackArray):")
-    lines.append('    """Attach generated accessors as @property on wrapper classes."""')
+    lines.append('    """Attach generated accessors as typed @property on wrapper classes."""')
+
+    # CropArray accessors
     lines.append("    # CropArray accessors")
     for spec in ACCESSOR_SPECS:
         if spec.target == "CropArray":
-            lines.append(f"    CropArray.{spec.prop} = property(lambda self, _A={spec.cls_name}: _A(self))")
-    lines.append("")
+            getter_name = f"_get_{spec.prop}"
+            lines.append(f"    def {getter_name}(self) -> {spec.cls_name}:")
+            lines.append(f"        return {spec.cls_name}(self)")
+            lines.append(f"    CropArray.{spec.prop} = property({getter_name})")
+            lines.append("")
+
+    # TrackArray accessors
     lines.append("    # TrackArray accessors")
     for spec in ACCESSOR_SPECS:
         if spec.target == "TrackArray":
-            lines.append(f"    TrackArray.{spec.prop} = property(lambda self, _A={spec.cls_name}: _A(self))")
-    lines.append("")
+            getter_name = f"_get_{spec.prop}"
+            lines.append(f"    def {getter_name}(self) -> {spec.cls_name}:")
+            lines.append(f"        return {spec.cls_name}(self)")
+            lines.append(f"    TrackArray.{spec.prop} = property({getter_name})")
+            lines.append("")
 
     OUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Wrote {OUT_PATH}")

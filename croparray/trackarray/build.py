@@ -79,10 +79,23 @@ def track_array_single(ca, as_object: bool = False):
 
         tracks.append(temp)
 
-    # Keep missing values as NaN rather than forcing zeros everywhere
+    # # Keep missing values as NaN rather than forcing zeros everywhere
+    # out_tracks = xr.concat(
+    #     tracks,
+    #     dim=pd.Index(ids, name="track_id"),
+    # )
+
+    orig_ids = np.asarray(ids)
+    new_ids = np.arange(len(orig_ids), dtype=int)
+
     out_tracks = xr.concat(
         tracks,
-        dim=pd.Index(ids, name="track_id"),
+        dim=pd.Index(new_ids, name="track_id"),
+    )
+
+    out_tracks["track_id_orig"] = xr.DataArray(
+        orig_ids,
+        dims=("track_id",),
     )
 
     out_tracks = out_tracks.transpose(

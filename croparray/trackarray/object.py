@@ -8,8 +8,13 @@ from ..crop_array_object import CropArray
 
 if TYPE_CHECKING:
     # Import only for type checking (avoids runtime circular imports)
-    from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure, TrackArrayNapari
-
+    from .._accessors_generated import (
+        TrackArrayPlot,
+        TrackArrayView,
+        TrackArrayDF,
+        TrackArrayMeasure,
+        TrackArrayNapari,
+    )
 
 @dataclass
 class TrackArray(CropArray):
@@ -42,7 +47,13 @@ class TrackArray(CropArray):
             raise ValueError("TrackArray dataset must have a 'track_id' dimension")
 
         # Track-specific accessors: DO NOT overwrite base .plot/.view/.df
-        from ..accessors import TrackArrayPlot, TrackArrayView, TrackArrayDF, TrackArrayMeasure, TrackArrayNapari
+        from .._accessors_generated import (
+            TrackArrayPlot,
+            TrackArrayView,
+            TrackArrayDF,
+            TrackArrayMeasure,
+            TrackArrayNapari,
+        )
 
         # --- accessor caches (private to avoid property collisions) ---
         object.__setattr__(self, "_tplot", TrackArrayPlot(self))

@@ -43,8 +43,12 @@ def tracklist(
     def _mask(da: xr.DataArray) -> xr.DataArray:
         if "track_id" not in da.dims:
             return xr.zeros_like(track_coord, dtype=bool)
+
         reduce_dims = [d for d in da.dims if d != "track_id"]
-        cnt = da.notnull().sum(dim=reduce_dims) if reduce_dims else da.notnull().astype(int)
+
+        valid = da.notnull() & (da != 0)
+
+        cnt = valid.sum(dim=reduce_dims) if reduce_dims else valid.astype(int)
         return cnt >= int(min_count)
 
     if var is not None:
