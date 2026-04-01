@@ -3,7 +3,7 @@ import xarray as xr
 
 __all__ = [
     # ... existing ...
-    "tracklist","track_length"
+    "tracklist","track_length","step_size", "msd"
 ]
 
 def tracklist(
@@ -70,7 +70,6 @@ def tracklist(
 
     return track_coord.values[present.values]
 
-
 def track_length(
     ta,
     *,
@@ -111,3 +110,161 @@ def track_length(
 
     return ta
 
+def msd(
+    self,
+    xvar: str = "xc",
+    yvar: str = "yc",
+    zvar: str | None = None,
+    name: str = "MSD",
+    space: str = "units",
+):
+    """
+    Compute mean squared displacement (MSD) vs lag for each track.
+
+    Returns a DataArray with the same non-time dims as the position variables
+    and dimension 't', where 't' is interpreted as lag time.
+
+    Parameters
+    ----------
+    xvar, yvar : str
+        Position variables, usually 'xc' and 'yc'.
+    zvar : str or None
+        Optional z position variable.
+    name : str
+        Name of returned DataArray.
+    space : {'units', 'pixels'}
+        If 'units', convert coordinates using dx before computing MSD.
+        If 'pixels', use raw coordinate values.
+    """
+    import xarray as xr
+
+    ds = self._obj if hasattr(self, "_obj") else self.ds if hasattr(self, "ds") else self
+
+    if xvar not in ds or yvar not in ds:
+        raise ValueError(f"Dataset must contain '{xvar}' and '{yvar}'")
+
+    if space not in {"units", "pixels"}:
+        raise ValueError("space must be 'units' or 'pixels'")
+
+    x = ds[xvar]
+    y = ds[yvar]
+    z = ds[zvar] if zvar is not None else None
+
+    if zvar is not None and zvar not in ds:
+        raise ValueError(f"Dataset must contain '{zvar}'")
+
+    if space == "units":
+        if not hasattr(self, "dx"):
+            raise ValueError("space='units' requested, but object has no attribute 'dx'")
+        x = x * self.dx
+        y = y * self.dx
+        if z is not None:
+            z = z * self.dx
+        base_units = getattr(self, "xyz_units", None)
+    else:
+        base_units = "px"
+
+    pos = [x, y]
+    dim_label = "2D"
+
+    if z is not None:
+        pos.append(z)
+        dim_label = "3D"
+
+    n_t = ds.sizes["t"]
+    msd_list = []
+
+    for lag in range(n_t):
+        diffsq = 0
+        for p in pos:
+            d = p.shift(t=-lag) - p
+            diffsq = diffsq + d**2
+
+        msd_lag = diffsq.isel(t=slice(0, n_t - lag)).mean("t", skipna=True)
+        msd_list.append(msd_lag)
+
+    out = xr.concat(msd_list, dim=ds["t"])
+    out = out.rename(name)
+
+    out.attrs["long_name"] = f"{dim_label} mean squared displacement"
+    out.attrs["description"] = "MSD vs lag time; coordinate 't' is interpreted as lag"
+    out.attrs["space"] = space
+
+    if base_units is not None:
+        out.attrs["units"] = f"{base_units}^2"
+
+    return out
+
+def step_size(
+    self,
+    xvar: str = "xc",
+    yvar: str = "yc",
+    zvar: str | None = None,
+    name: str = "step_size",
+    space: str = "units",
+):
+    """
+    Compute frame-to-frame step size and return as a DataArray.
+
+    Step size at time t is the Euclidean distance between positions at t and t-1.
+    The first timepoint is NaN.
+
+    Parameters
+    ----------
+    xvar, yvar : str
+        Position variables, usually 'xc' and 'yc'.
+    zvar : str or None
+        Optional z position variable.
+    name : str
+        Name of returned DataArray.
+    space : {'units', 'pixels'}
+        If 'units', convert coordinates using dx before computing step size.
+        If 'pixels', use raw coordinate values.
+    """
+    import numpy as np
+
+    ds = self._obj if hasattr(self, "_obj") else self.ds if hasattr(self, "ds") else self
+
+    if xvar not in ds or yvar not in ds:
+        raise ValueError(f"Dataset must contain '{xvar}' and '{yvar}'")
+
+    if space not in {"units", "pixels"}:
+        raise ValueError("space must be 'units' or 'pixels'")
+
+    x = ds[xvar]
+    y = ds[yvar]
+    z = ds[zvar] if zvar is not None else None
+
+    if zvar is not None and zvar not in ds:
+        raise ValueError(f"Dataset must contain '{zvar}'")
+
+    if space == "units":
+        if not hasattr(self, "dx"):
+            raise ValueError("space='units' requested, but object has no attribute 'dx'")
+        x = x * self.dx
+        y = y * self.dx
+        if z is not None:
+            z = z * self.dx
+        units = getattr(self, "xyz_units", None)
+    else:
+        units = "px"
+
+    dx = x.diff("t")
+    dy = y.diff("t")
+
+    if z is not None:
+        dz = z.diff("t")
+        out = np.sqrt(dx**2 + dy**2 + dz**2)
+        long_name = "3D step size"
+    else:
+        out = np.sqrt(dx**2 + dy**2)
+        long_name = "2D step size"
+
+    out = out.reindex(t=ds.t)
+    out.name = name
+    out.attrs["long_name"] = long_name
+    if units is not None:
+        out.attrs["units"] = units
+    out.attrs["space"] = space
+
+    return out

@@ -44,7 +44,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import xarray as xr
 
-__all__ = ["plot_trackarray_crops", "plot_track_signal_traces"]
+__all__ = ["plot_trackarray_crops", "plot_track_signal_traces", "trajectories_xy"]
 
 
 # -----------------------
@@ -358,8 +358,6 @@ def plot_trackarray_crops(
 
     return out
 
-
-
 def plot_track_signal_traces(
     ta_dataset: xr.Dataset,
     track_ids: Sequence[int],
@@ -587,3 +585,141 @@ def plot_track_signal_traces(
     plt.tight_layout()
     plt.show()
 
+def trajectories_xy(
+    self,
+    xvar: str = "xc",
+    yvar: str = "yc",
+    hue: str | None = None,
+    col: str | None = None,
+    row: str | None = None,
+    space: str = "units",
+    center_tracks: bool = False,
+    alpha: float = 0.5,
+    linewidth: float = 1.0,
+    height: float = 4,
+    aspect: float = 1,
+    dropna: bool = True,
+    legend: bool = True,
+    **kwargs,
+):
+    """
+    Plot XY trajectories using seaborn relplot (FacetGrid).
+
+    Parameters
+    ----------
+    xvar, yvar : str
+        Position variables, typically 'xc' and 'yc'.
+    hue, col, row : str or None
+        Seaborn grouping variables (e.g. 'exp', 'fov').
+    space : {'units', 'pixels'}
+        Convert coordinates using dx if 'units'.
+    center_tracks : bool
+        If True, shift each trajectory so it starts at (0, 0).
+    alpha : float
+        Line transparency.
+    linewidth : float
+        Line width.
+    height, aspect : float
+        Seaborn facet sizing.
+    dropna : bool
+        Drop NaN rows before plotting.
+    legend : bool
+        Show legend.
+
+    Returns
+    -------
+    g : seaborn.FacetGrid
+    """
+    import seaborn as sns
+    import xarray as xr
+
+    ds = self._obj if hasattr(self, "_obj") else self.ds if hasattr(self, "ds") else self
+
+    if xvar not in ds or yvar not in ds:
+        raise ValueError(f"Dataset must contain '{xvar}' and '{yvar}'")
+
+    if space not in {"units", "pixels"}:
+        raise ValueError("space must be 'units' or 'pixels'")
+
+    x = ds[xvar]
+    y = ds[yvar]
+
+    # ---- scaling ----
+    if space == "units":
+        if not hasattr(self, "dx"):
+            raise ValueError("space='units' requested but dx not found")
+        x = x * self.dx
+        y = y * self.dx
+        units = getattr(self, "xyz_units", None)
+    else:
+        units = "px"
+
+    # ---- to dataframe ----
+    tmp = xr.Dataset({"_x": x, "_y": y})
+    df = tmp.to_dataframe().reset_index()
+
+    if dropna:
+        df = df.dropna(subset=["_x", "_y"])
+
+    # ---- trajectory ID ----
+    id_cols = [c for c in ["exp", "fov", "track_id"] if c in df.columns]
+    if not id_cols:
+        raise ValueError("Need exp/fov/track_id to define trajectories")
+
+    df["_traj_id"] = df[id_cols].astype(str).agg(" | ".join, axis=1)
+
+    # ---- sort by time ----
+    if "t" in df.columns:
+        df = df.sort_values(id_cols + ["t"])
+
+    # ---- center tracks ----
+    if center_tracks:
+        df["_x"] = df["_x"] - df.groupby("_traj_id")["_x"].transform("first")
+        df["_y"] = df["_y"] - df.groupby("_traj_id")["_y"].transform("first")
+
+    # ---- seaborn plot ----
+    g = sns.relplot(
+        data=df,
+        x="_x",
+        y="_y",
+        kind="line",
+        hue=hue,
+        col=col,
+        row=row,
+        units="_traj_id",
+        estimator=None,
+        alpha=alpha,
+        linewidth=linewidth,
+        height=height,
+        aspect=aspect,
+        legend=legend,
+        **kwargs,
+    )
+
+    # ---- axis labels ----
+    xlabel = "x"
+    ylabel = "y"
+    if center_tracks:
+        xlabel = "Δx"
+        ylabel = "Δy"
+    if units is not None:
+        xlabel += f" ({units})"
+        ylabel += f" ({units})"
+
+    g.set_axis_labels(xlabel, ylabel)
+
+    # ---- equal aspect ----
+    for ax in g.axes.flat:
+        ax.set_aspect("equal")
+
+    # ---- title ----
+    title = "XY trajectories"
+    if center_tracks:
+        title = "Centered XY trajectories"
+    if space == "pixels":
+        title += " (pixels)"
+
+    g.figure.suptitle(title)
+    g.figure.tight_layout()
+
+    return g

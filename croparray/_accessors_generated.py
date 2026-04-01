@@ -1246,6 +1246,7 @@ from croparray.plot import montage as _impl_TrackArrayPlot_montage
 from croparray.plot import plot_croparray_crops as _impl_TrackArrayPlot_plot_croparray_crops
 from croparray.trackarray.plot import plot_trackarray_crops as _impl_TrackArrayPlot_plot_trackarray_crops
 from croparray.trackarray.plot import plot_track_signal_traces as _impl_TrackArrayPlot_plot_track_signal_traces
+from croparray.trackarray.plot import trajectories_xy as _impl_TrackArrayPlot_trajectories_xy
 
 @dataclass
 class TrackArrayPlot(_BaseAccessor):
@@ -1401,6 +1402,35 @@ None
     Displays the figure via matplotlib."""
         return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, legend_loc=legend_loc, show_legend=show_legend)
 
+    def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, **kwargs):
+        """Plot XY trajectories using seaborn relplot (FacetGrid).
+
+Parameters
+----------
+xvar, yvar : str
+    Position variables, typically 'xc' and 'yc'.
+hue, col, row : str or None
+    Seaborn grouping variables (e.g. 'exp', 'fov').
+space : {'units', 'pixels'}
+    Convert coordinates using dx if 'units'.
+center_tracks : bool
+    If True, shift each trajectory so it starts at (0, 0).
+alpha : float
+    Line transparency.
+linewidth : float
+    Line width.
+height, aspect : float
+    Seaborn facet sizing.
+dropna : bool
+    Drop NaN rows before plotting.
+legend : bool
+    Show legend.
+
+Returns
+-------
+g : seaborn.FacetGrid"""
+        return _impl_TrackArrayPlot_trajectories_xy(self.ds, xvar, yvar, hue, col, row, space, center_tracks, alpha, linewidth, height, aspect, dropna, legend, **kwargs)
+
 
 TrackArrayPlot.montage.__doc__ = _impl_TrackArrayPlot_montage.__doc__
 TrackArrayPlot.montage.__wrapped__ = _impl_TrackArrayPlot_montage
@@ -1414,6 +1444,9 @@ TrackArrayPlot.plot_trackarray_crops.__signature__ = inspect.Signature(parameter
 TrackArrayPlot.plot_track_signal_traces.__doc__ = _impl_TrackArrayPlot_plot_track_signal_traces.__doc__
 TrackArrayPlot.plot_track_signal_traces.__wrapped__ = _impl_TrackArrayPlot_plot_track_signal_traces
 TrackArrayPlot.plot_track_signal_traces.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_plot_track_signal_traces).parameters.values())[1:])
+TrackArrayPlot.trajectories_xy.__doc__ = _impl_TrackArrayPlot_trajectories_xy.__doc__
+TrackArrayPlot.trajectories_xy.__wrapped__ = _impl_TrackArrayPlot_trajectories_xy
+TrackArrayPlot.trajectories_xy.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_trajectories_xy).parameters.values())[1:])
 
 
 from croparray.measure import best_z_proj as _impl_TrackArrayMeasure_best_z_proj
@@ -1423,6 +1456,8 @@ from croparray.measure import mask_props as _impl_TrackArrayMeasure_mask_props
 from croparray.measure import mask_skeleton_length as _impl_TrackArrayMeasure_mask_skeleton_length
 from croparray.trackarray.measure import tracklist as _impl_TrackArrayMeasure_tracklist
 from croparray.trackarray.measure import track_length as _impl_TrackArrayMeasure_track_length
+from croparray.trackarray.measure import step_size as _impl_TrackArrayMeasure_step_size
+from croparray.trackarray.measure import msd as _impl_TrackArrayMeasure_msd
 
 @dataclass
 class TrackArrayMeasure(_BaseAccessor):
@@ -1621,6 +1656,44 @@ coordinates such as 'xc' are NaN at timepoints where no detection exists
 for that track."""
         return _impl_TrackArrayMeasure_track_length(self.ds, coord=coord, out_name=out_name, broadcast_like=broadcast_like)
 
+    def step_size(self, xvar='xc', yvar='yc', zvar=None, name='step_size', space='units'):
+        """Compute frame-to-frame step size and return as a DataArray.
+
+Step size at time t is the Euclidean distance between positions at t and t-1.
+The first timepoint is NaN.
+
+Parameters
+----------
+xvar, yvar : str
+    Position variables, usually 'xc' and 'yc'.
+zvar : str or None
+    Optional z position variable.
+name : str
+    Name of returned DataArray.
+space : {'units', 'pixels'}
+    If 'units', convert coordinates using dx before computing step size.
+    If 'pixels', use raw coordinate values."""
+        return _impl_TrackArrayMeasure_step_size(self.ds, xvar, yvar, zvar, name, space)
+
+    def msd(self, xvar='xc', yvar='yc', zvar=None, name='MSD', space='units'):
+        """Compute mean squared displacement (MSD) vs lag for each track.
+
+Returns a DataArray with the same non-time dims as the position variables
+and dimension 't', where 't' is interpreted as lag time.
+
+Parameters
+----------
+xvar, yvar : str
+    Position variables, usually 'xc' and 'yc'.
+zvar : str or None
+    Optional z position variable.
+name : str
+    Name of returned DataArray.
+space : {'units', 'pixels'}
+    If 'units', convert coordinates using dx before computing MSD.
+    If 'pixels', use raw coordinate values."""
+        return _impl_TrackArrayMeasure_msd(self.ds, xvar, yvar, zvar, name, space)
+
 
 TrackArrayMeasure.best_z_proj.__doc__ = _impl_TrackArrayMeasure_best_z_proj.__doc__
 TrackArrayMeasure.best_z_proj.__wrapped__ = _impl_TrackArrayMeasure_best_z_proj
@@ -1643,6 +1716,12 @@ TrackArrayMeasure.tracklist.__signature__ = inspect.Signature(parameters=[inspec
 TrackArrayMeasure.track_length.__doc__ = _impl_TrackArrayMeasure_track_length.__doc__
 TrackArrayMeasure.track_length.__wrapped__ = _impl_TrackArrayMeasure_track_length
 TrackArrayMeasure.track_length.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_track_length).parameters.values())[1:])
+TrackArrayMeasure.step_size.__doc__ = _impl_TrackArrayMeasure_step_size.__doc__
+TrackArrayMeasure.step_size.__wrapped__ = _impl_TrackArrayMeasure_step_size
+TrackArrayMeasure.step_size.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_step_size).parameters.values())[1:])
+TrackArrayMeasure.msd.__doc__ = _impl_TrackArrayMeasure_msd.__doc__
+TrackArrayMeasure.msd.__wrapped__ = _impl_TrackArrayMeasure_msd
+TrackArrayMeasure.msd.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_msd).parameters.values())[1:])
 
 
 from croparray.napari_view import montage_viewer as _impl_TrackArrayView_montage_viewer

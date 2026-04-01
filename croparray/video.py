@@ -580,8 +580,6 @@ def _panel_matches_scalebar_location(
     elif scalebar_panel == "lr":
         return row == nrows - 1 and col == ncols - 1
 
-
-
 def plot_multichannel_plane_montage(
     tiff_movies,
     t=0,
