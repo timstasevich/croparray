@@ -600,38 +600,61 @@ def trajectories_xy(
     aspect: float = 1,
     dropna: bool = True,
     legend: bool = True,
+    color_time: bool = False,
+    time_var: str = "t",
+    time_palette: str = "viridis",
+    add_colorbar: bool = True,
+    facet_kws: dict | None = None,
     **kwargs,
 ):
     """
-    Plot XY trajectories using seaborn relplot (FacetGrid).
+    Plot XY trajectories with optional faceting and optional time-colored paths.
 
     Parameters
     ----------
     xvar, yvar : str
         Position variables, typically 'xc' and 'yc'.
     hue, col, row : str or None
-        Seaborn grouping variables (e.g. 'exp', 'fov').
+        Grouping/faceting variables.
     space : {'units', 'pixels'}
-        Convert coordinates using dx if 'units'.
+        Convert coordinates using dx/dy if 'units'.
     center_tracks : bool
         If True, shift each trajectory so it starts at (0, 0).
     alpha : float
-        Line transparency.
+        Transparency for lines.
     linewidth : float
         Line width.
     height, aspect : float
-        Seaborn facet sizing.
+        Facet sizing.
     dropna : bool
-        Drop NaN rows before plotting.
+        Drop rows with NaN x/y before plotting.
     legend : bool
-        Show legend.
+        Show legend when using categorical hue.
+    color_time : bool
+        If True, color each trajectory segment by time.
+        When True, `hue` is ignored.
+    time_var : str
+        Column used for time coloring, usually 't'.
+    time_palette : str
+        Matplotlib colormap name for time coloring.
+    add_colorbar : bool
+        If True and color_time=True, add a shared colorbar.
+    facet_kws : dict or None
+        Extra kwargs passed to seaborn.FacetGrid.
+    **kwargs
+        Extra kwargs passed to seaborn.lineplot when color_time=False.
 
     Returns
     -------
     g : seaborn.FacetGrid
     """
+    import numpy as np
+    import pandas as pd
     import seaborn as sns
     import xarray as xr
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+    from matplotlib.colors import Normalize
 
     ds = self._obj if hasattr(self, "_obj") else self.ds if hasattr(self, "ds") else self
 
@@ -641,22 +664,43 @@ def trajectories_xy(
     if space not in {"units", "pixels"}:
         raise ValueError("space must be 'units' or 'pixels'")
 
+    if color_time and time_var not in ds.dims and time_var not in ds.coords and time_var not in ds.variables:
+        raise ValueError(f"time_var='{time_var}' not found in dataset")
+
+    # ---- scale coordinates ----
     x = ds[xvar]
     y = ds[yvar]
 
-    # ---- scaling ----
     if space == "units":
-        if not hasattr(self, "dx"):
+        dx = getattr(self, "dx", None)
+        dy = getattr(self, "dy", dx)
+        if dx is None:
             raise ValueError("space='units' requested but dx not found")
-        x = x * self.dx
-        y = y * self.dx
+        x = x * dx
+        y = y * dy
         units = getattr(self, "xyz_units", None)
     else:
         units = "px"
 
-    # ---- to dataframe ----
-    tmp = xr.Dataset({"_x": x, "_y": y})
+    # ---- gather variables needed in dataframe ----
+    needed = {"_x": x, "_y": y}
+
+    for v in [hue, col, row]:
+        if v is not None and v not in needed:
+            if v in ds:
+                needed[v] = ds[v]
+            elif v in ds.coords:
+                needed[v] = ds.coords[v]
+            # if v is already an index/dimension coord, reset_index will expose it
+
+    if color_time and time_var in ds and time_var not in needed:
+        needed[time_var] = ds[time_var]
+
+    tmp = xr.Dataset(needed)
     df = tmp.to_dataframe().reset_index()
+
+    # avoid duplicate columns after reset_index
+    df = df.loc[:, ~df.columns.duplicated()].copy()
 
     if dropna:
         df = df.dropna(subset=["_x", "_y"])
@@ -669,32 +713,118 @@ def trajectories_xy(
     df["_traj_id"] = df[id_cols].astype(str).agg(" | ".join, axis=1)
 
     # ---- sort by time ----
-    if "t" in df.columns:
-        df = df.sort_values(id_cols + ["t"])
+    if time_var in df.columns:
+        df = df.sort_values(id_cols + [time_var])
+    else:
+        df = df.sort_values(id_cols)
 
     # ---- center tracks ----
     if center_tracks:
         df["_x"] = df["_x"] - df.groupby("_traj_id")["_x"].transform("first")
         df["_y"] = df["_y"] - df.groupby("_traj_id")["_y"].transform("first")
 
-    # ---- seaborn plot ----
-    g = sns.relplot(
+    facet_kws = {} if facet_kws is None else dict(facet_kws)
+
+    # ---- build FacetGrid ----
+    g = sns.FacetGrid(
         data=df,
-        x="_x",
-        y="_y",
-        kind="line",
-        hue=hue,
-        col=col,
         row=row,
-        units="_traj_id",
-        estimator=None,
-        alpha=alpha,
-        linewidth=linewidth,
+        col=col,
         height=height,
         aspect=aspect,
-        legend=legend,
-        **kwargs,
+        legend_out=True,
+        **facet_kws,
     )
+
+    if not color_time:
+        # standard single-color-per-track mode
+        def _plot_lines(data, color=None, **kws):
+            sns.lineplot(
+                data=data,
+                x="_x",
+                y="_y",
+                units="_traj_id",
+                estimator=None,
+                hue=hue,
+                alpha=alpha,
+                linewidth=linewidth,
+                legend=False,   # we'll manage legend at grid level if needed
+                sort=False,
+                **kwargs,
+            )
+
+        g.map_dataframe(_plot_lines)
+
+        if hue is not None and legend:
+            # add legend manually from the full grid mapping
+            g.add_legend()
+
+    else:
+        # time-colored segment mode
+        if hue is not None:
+            print("Note: color_time=True, so `hue` is ignored.")
+
+        if time_var not in df.columns:
+            raise ValueError(f"time_var='{time_var}' must appear in dataframe columns")
+
+        tvals = df[time_var].to_numpy()
+        tvals = tvals[np.isfinite(tvals)]
+        if len(tvals) == 0:
+            raise ValueError(f"No finite values found in time_var='{time_var}'")
+
+        norm = Normalize(vmin=np.nanmin(tvals), vmax=np.nanmax(tvals))
+        cmap = plt.get_cmap(time_palette)
+
+        def _plot_time_colored(data, **kws):
+            ax = plt.gca()
+
+            for _, sub in data.groupby("_traj_id", sort=False):
+                sub = sub.sort_values(time_var)
+
+                xvals = sub["_x"].to_numpy()
+                yvals = sub["_y"].to_numpy()
+                t = sub[time_var].to_numpy()
+
+                good = np.isfinite(xvals) & np.isfinite(yvals) & np.isfinite(t)
+                xvals = xvals[good]
+                yvals = yvals[good]
+                t = t[good]
+
+                if len(xvals) < 2:
+                    continue
+
+                pts = np.column_stack([xvals, yvals]).reshape(-1, 1, 2)
+                segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
+
+                # color each segment by the starting timepoint
+                lc = LineCollection(
+                    segs,
+                    cmap=cmap,
+                    norm=norm,
+                    linewidths=linewidth,
+                    alpha=alpha,
+                )
+                lc.set_array(t[:-1])
+                ax.add_collection(lc)
+
+            ax.autoscale_view()
+
+        g.map_dataframe(_plot_time_colored)
+
+        if add_colorbar:
+            # --- create scalar mappable ---
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+
+            # --- shrink main grid to make room ---
+            g.figure.subplots_adjust(right=0.75)
+
+            # --- add dedicated colorbar axis (no overlap) ---
+            cax = g.figure.add_axes([0.95, 0.2, 0.02, 0.6])  # [left, bottom, width, height]
+
+            cbar = g.figure.colorbar(sm, cax=cax)
+            cbar.set_label(time_var)
+
 
     # ---- axis labels ----
     xlabel = "x"
@@ -710,16 +840,19 @@ def trajectories_xy(
 
     # ---- equal aspect ----
     for ax in g.axes.flat:
-        ax.set_aspect("equal")
+        if ax is not None:
+            ax.set_aspect("equal")
 
     # ---- title ----
     title = "XY trajectories"
     if center_tracks:
         title = "Centered XY trajectories"
+    if color_time:
+        title += f" colored by {time_var}"
     if space == "pixels":
         title += " (pixels)"
 
-    g.figure.suptitle(title)
+    g.figure.suptitle(title, y=1.02)
     g.figure.tight_layout()
 
     return g

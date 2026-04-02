@@ -13,8 +13,7 @@ import xarray as xr
 from typing import Any, Sequence
 import pandas as pd
 
-__all__ = ["montage", "plot_croparray_crops"]
-
+__all__ = ["montage", "plot_croparray_crops", "relplot", "displot", "catplot", "swarmplot"]
 
 _EPS = 1e-9
 
@@ -363,6 +362,13 @@ def catplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = Non
     df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
     return sns.catplot(data=df, **kwargs)
 
+def swarmplot(ds, /, *, vars: Sequence[str] | None = None, query: str | None = None, dropna: bool = True, **kwargs: Any):
+    """
+    Seaborn swarmplot with data auto-built from ds via variables_to_df.
+    """
+    import seaborn as sns
+    df = _build_plot_df(ds, vars=vars, query=query, dropna=dropna, kwargs=kwargs)
+    return sns.swarmplot(data=df, **kwargs)
 
 def plot_croparray_crops(
     ds: xr.Dataset,

@@ -117,6 +117,8 @@ def msd(
     zvar: str | None = None,
     name: str = "MSD",
     space: str = "units",
+    drift_correct: bool = False,
+    drift_dims: tuple[str, ...] | None = None,
 ):
     """
     Compute mean squared displacement (MSD) vs lag for each track.
@@ -133,8 +135,21 @@ def msd(
     name : str
         Name of returned DataArray.
     space : {'units', 'pixels'}
-        If 'units', convert coordinates using dx before computing MSD.
+        If 'units', convert coordinates using pixel sizes before computing MSD.
         If 'pixels', use raw coordinate values.
+    drift_correct : bool
+        If True, subtract per-timepoint field drift estimated from the mean
+        position of all spots in each FOV.
+    drift_dims : tuple[str, ...] or None
+        Dimensions over which to average when estimating drift. If None,
+        defaults to ('track_id',) when present, otherwise all dims except
+        't', 'exp', and 'fov'.
+
+    Notes
+    -----
+    Drift correction is applied separately within each FOV because the mean
+    is not taken over 'exp' or 'fov'. The estimated drift trace is simply
+    subtracted from each coordinate; any constant offset is irrelevant for MSD.
     """
     import xarray as xr
 
@@ -143,6 +158,9 @@ def msd(
     if xvar not in ds or yvar not in ds:
         raise ValueError(f"Dataset must contain '{xvar}' and '{yvar}'")
 
+    if zvar is not None and zvar not in ds:
+        raise ValueError(f"Dataset must contain '{zvar}'")
+
     if space not in {"units", "pixels"}:
         raise ValueError("space must be 'units' or 'pixels'")
 
@@ -150,19 +168,45 @@ def msd(
     y = ds[yvar]
     z = ds[zvar] if zvar is not None else None
 
-    if zvar is not None and zvar not in ds:
-        raise ValueError(f"Dataset must contain '{zvar}'")
-
+    # unit conversion
     if space == "units":
-        if not hasattr(self, "dx"):
+        dx = getattr(self, "dx", None)
+        dy = getattr(self, "dy", dx)
+        dz = getattr(self, "dz", dx)
+
+        if dx is None:
             raise ValueError("space='units' requested, but object has no attribute 'dx'")
-        x = x * self.dx
-        y = y * self.dx
+
+        x = x * dx
+        y = y * dy
         if z is not None:
-            z = z * self.dx
+            z = z * dz
+
         base_units = getattr(self, "xyz_units", None)
     else:
         base_units = "px"
+
+    # optional drift correction
+    if drift_correct:
+        if drift_dims is None:
+            if "track_id" in x.dims:
+                drift_dims = ("track_id",)
+            else:
+                drift_dims = tuple(d for d in x.dims if d not in {"t", "exp", "fov"})
+
+        missing = [d for d in drift_dims if d not in x.dims]
+        if missing:
+            raise ValueError(f"drift_dims not present in position arrays: {missing}")
+
+        x_drift = x.mean(dim=drift_dims, skipna=True)
+        y_drift = y.mean(dim=drift_dims, skipna=True)
+
+        x = x - x_drift
+        y = y - y_drift
+
+        if z is not None:
+            z_drift = z.mean(dim=drift_dims, skipna=True)
+            z = z - z_drift
 
     pos = [x, y]
     dim_label = "2D"
@@ -189,6 +233,10 @@ def msd(
     out.attrs["long_name"] = f"{dim_label} mean squared displacement"
     out.attrs["description"] = "MSD vs lag time; coordinate 't' is interpreted as lag"
     out.attrs["space"] = space
+    out.attrs["drift_corrected"] = drift_correct
+
+    if drift_correct and drift_dims is not None:
+        out.attrs["drift_dims"] = tuple(drift_dims)
 
     if base_units is not None:
         out.attrs["units"] = f"{base_units}^2"

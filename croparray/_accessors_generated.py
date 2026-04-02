@@ -16,6 +16,10 @@ class _BaseAccessor:
 
 from croparray.plot import montage as _impl_CropArrayPlot_montage
 from croparray.plot import plot_croparray_crops as _impl_CropArrayPlot_plot_croparray_crops
+from croparray.plot import relplot as _impl_CropArrayPlot_relplot
+from croparray.plot import displot as _impl_CropArrayPlot_displot
+from croparray.plot import catplot as _impl_CropArrayPlot_catplot
+from croparray.plot import swarmplot as _impl_CropArrayPlot_swarmplot
 
 @dataclass
 class CropArrayPlot(_BaseAccessor):
@@ -105,6 +109,24 @@ xr.DataArray
     The normalized DataArray used for plotting."""
         return _impl_CropArrayPlot_plot_croparray_crops(self.ds, layer=layer, n=n, t=t, col=col, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
+    def relplot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn relplot with data auto-built from ds via variables_to_df.
+
+Supports seaborn-native facetting: row=, col=, col_wrap=, etc."""
+        return _impl_CropArrayPlot_relplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+    def displot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn displot with data auto-built from ds via variables_to_df."""
+        return _impl_CropArrayPlot_displot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+    def catplot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn catplot with data auto-built from ds via variables_to_df."""
+        return _impl_CropArrayPlot_catplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+    def swarmplot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn swarmplot with data auto-built from ds via variables_to_df."""
+        return _impl_CropArrayPlot_swarmplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
 
 CropArrayPlot.montage.__doc__ = _impl_CropArrayPlot_montage.__doc__
 CropArrayPlot.montage.__wrapped__ = _impl_CropArrayPlot_montage
@@ -112,6 +134,18 @@ CropArrayPlot.montage.__signature__ = inspect.Signature(parameters=[inspect.Para
 CropArrayPlot.plot_croparray_crops.__doc__ = _impl_CropArrayPlot_plot_croparray_crops.__doc__
 CropArrayPlot.plot_croparray_crops.__wrapped__ = _impl_CropArrayPlot_plot_croparray_crops
 CropArrayPlot.plot_croparray_crops.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_plot_croparray_crops).parameters.values())[1:])
+CropArrayPlot.relplot.__doc__ = _impl_CropArrayPlot_relplot.__doc__
+CropArrayPlot.relplot.__wrapped__ = _impl_CropArrayPlot_relplot
+CropArrayPlot.relplot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_relplot).parameters.values())[1:])
+CropArrayPlot.displot.__doc__ = _impl_CropArrayPlot_displot.__doc__
+CropArrayPlot.displot.__wrapped__ = _impl_CropArrayPlot_displot
+CropArrayPlot.displot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_displot).parameters.values())[1:])
+CropArrayPlot.catplot.__doc__ = _impl_CropArrayPlot_catplot.__doc__
+CropArrayPlot.catplot.__wrapped__ = _impl_CropArrayPlot_catplot
+CropArrayPlot.catplot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_catplot).parameters.values())[1:])
+CropArrayPlot.swarmplot.__doc__ = _impl_CropArrayPlot_swarmplot.__doc__
+CropArrayPlot.swarmplot.__wrapped__ = _impl_CropArrayPlot_swarmplot
+CropArrayPlot.swarmplot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayPlot_swarmplot).parameters.values())[1:])
 
 
 from croparray.measure import best_z_proj as _impl_CropArrayMeasure_best_z_proj
@@ -1244,6 +1278,10 @@ CropArrayIO.open_croparray_zarr.__signature__ = inspect.Signature(parameters=[in
 
 from croparray.plot import montage as _impl_TrackArrayPlot_montage
 from croparray.plot import plot_croparray_crops as _impl_TrackArrayPlot_plot_croparray_crops
+from croparray.plot import relplot as _impl_TrackArrayPlot_relplot
+from croparray.plot import displot as _impl_TrackArrayPlot_displot
+from croparray.plot import catplot as _impl_TrackArrayPlot_catplot
+from croparray.plot import swarmplot as _impl_TrackArrayPlot_swarmplot
 from croparray.trackarray.plot import plot_trackarray_crops as _impl_TrackArrayPlot_plot_trackarray_crops
 from croparray.trackarray.plot import plot_track_signal_traces as _impl_TrackArrayPlot_plot_track_signal_traces
 from croparray.trackarray.plot import trajectories_xy as _impl_TrackArrayPlot_trajectories_xy
@@ -1336,6 +1374,24 @@ xr.DataArray
     The normalized DataArray used for plotting."""
         return _impl_TrackArrayPlot_plot_croparray_crops(self.ds, layer=layer, n=n, t=t, col=col, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
+    def relplot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn relplot with data auto-built from ds via variables_to_df.
+
+Supports seaborn-native facetting: row=, col=, col_wrap=, etc."""
+        return _impl_TrackArrayPlot_relplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+    def displot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn displot with data auto-built from ds via variables_to_df."""
+        return _impl_TrackArrayPlot_displot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+    def catplot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn catplot with data auto-built from ds via variables_to_df."""
+        return _impl_TrackArrayPlot_catplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
+    def swarmplot(self, vars=None, query=None, dropna=True, **kwargs):
+        """Seaborn swarmplot with data auto-built from ds via variables_to_df."""
+        return _impl_TrackArrayPlot_swarmplot(self.ds, vars=vars, query=query, dropna=dropna, **kwargs)
+
     def plot_trackarray_crops(self, layer='best_z', fov=0, track_ids=(1,), t=(0, 10, 3), rolling=1, quantile_range=(0.02, 0.99), show_grayscale=True, show_merge_chs=None, ch=None, suppress_labels=True, show_suptitle=True):
         """Plot track-centered image crops across time using xarray.plot.imshow.
 
@@ -1402,34 +1458,47 @@ None
     Displays the figure via matplotlib."""
         return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, legend_loc=legend_loc, show_legend=show_legend)
 
-    def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, **kwargs):
-        """Plot XY trajectories using seaborn relplot (FacetGrid).
+    def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, color_time=False, time_var='t', time_palette='viridis', add_colorbar=True, facet_kws=None, **kwargs):
+        """Plot XY trajectories with optional faceting and optional time-colored paths.
 
 Parameters
 ----------
 xvar, yvar : str
     Position variables, typically 'xc' and 'yc'.
 hue, col, row : str or None
-    Seaborn grouping variables (e.g. 'exp', 'fov').
+    Grouping/faceting variables.
 space : {'units', 'pixels'}
-    Convert coordinates using dx if 'units'.
+    Convert coordinates using dx/dy if 'units'.
 center_tracks : bool
     If True, shift each trajectory so it starts at (0, 0).
 alpha : float
-    Line transparency.
+    Transparency for lines.
 linewidth : float
     Line width.
 height, aspect : float
-    Seaborn facet sizing.
+    Facet sizing.
 dropna : bool
-    Drop NaN rows before plotting.
+    Drop rows with NaN x/y before plotting.
 legend : bool
-    Show legend.
+    Show legend when using categorical hue.
+color_time : bool
+    If True, color each trajectory segment by time.
+    When True, `hue` is ignored.
+time_var : str
+    Column used for time coloring, usually 't'.
+time_palette : str
+    Matplotlib colormap name for time coloring.
+add_colorbar : bool
+    If True and color_time=True, add a shared colorbar.
+facet_kws : dict or None
+    Extra kwargs passed to seaborn.FacetGrid.
+**kwargs
+    Extra kwargs passed to seaborn.lineplot when color_time=False.
 
 Returns
 -------
 g : seaborn.FacetGrid"""
-        return _impl_TrackArrayPlot_trajectories_xy(self.ds, xvar, yvar, hue, col, row, space, center_tracks, alpha, linewidth, height, aspect, dropna, legend, **kwargs)
+        return _impl_TrackArrayPlot_trajectories_xy(self.ds, xvar, yvar, hue, col, row, space, center_tracks, alpha, linewidth, height, aspect, dropna, legend, color_time, time_var, time_palette, add_colorbar, facet_kws, **kwargs)
 
 
 TrackArrayPlot.montage.__doc__ = _impl_TrackArrayPlot_montage.__doc__
@@ -1438,6 +1507,18 @@ TrackArrayPlot.montage.__signature__ = inspect.Signature(parameters=[inspect.Par
 TrackArrayPlot.plot_croparray_crops.__doc__ = _impl_TrackArrayPlot_plot_croparray_crops.__doc__
 TrackArrayPlot.plot_croparray_crops.__wrapped__ = _impl_TrackArrayPlot_plot_croparray_crops
 TrackArrayPlot.plot_croparray_crops.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_plot_croparray_crops).parameters.values())[1:])
+TrackArrayPlot.relplot.__doc__ = _impl_TrackArrayPlot_relplot.__doc__
+TrackArrayPlot.relplot.__wrapped__ = _impl_TrackArrayPlot_relplot
+TrackArrayPlot.relplot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_relplot).parameters.values())[1:])
+TrackArrayPlot.displot.__doc__ = _impl_TrackArrayPlot_displot.__doc__
+TrackArrayPlot.displot.__wrapped__ = _impl_TrackArrayPlot_displot
+TrackArrayPlot.displot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_displot).parameters.values())[1:])
+TrackArrayPlot.catplot.__doc__ = _impl_TrackArrayPlot_catplot.__doc__
+TrackArrayPlot.catplot.__wrapped__ = _impl_TrackArrayPlot_catplot
+TrackArrayPlot.catplot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_catplot).parameters.values())[1:])
+TrackArrayPlot.swarmplot.__doc__ = _impl_TrackArrayPlot_swarmplot.__doc__
+TrackArrayPlot.swarmplot.__wrapped__ = _impl_TrackArrayPlot_swarmplot
+TrackArrayPlot.swarmplot.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_swarmplot).parameters.values())[1:])
 TrackArrayPlot.plot_trackarray_crops.__doc__ = _impl_TrackArrayPlot_plot_trackarray_crops.__doc__
 TrackArrayPlot.plot_trackarray_crops.__wrapped__ = _impl_TrackArrayPlot_plot_trackarray_crops
 TrackArrayPlot.plot_trackarray_crops.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayPlot_plot_trackarray_crops).parameters.values())[1:])
@@ -1675,7 +1756,7 @@ space : {'units', 'pixels'}
     If 'pixels', use raw coordinate values."""
         return _impl_TrackArrayMeasure_step_size(self.ds, xvar, yvar, zvar, name, space)
 
-    def msd(self, xvar='xc', yvar='yc', zvar=None, name='MSD', space='units'):
+    def msd(self, xvar='xc', yvar='yc', zvar=None, name='MSD', space='units', drift_correct=False, drift_dims=None):
         """Compute mean squared displacement (MSD) vs lag for each track.
 
 Returns a DataArray with the same non-time dims as the position variables
@@ -1690,9 +1771,22 @@ zvar : str or None
 name : str
     Name of returned DataArray.
 space : {'units', 'pixels'}
-    If 'units', convert coordinates using dx before computing MSD.
-    If 'pixels', use raw coordinate values."""
-        return _impl_TrackArrayMeasure_msd(self.ds, xvar, yvar, zvar, name, space)
+    If 'units', convert coordinates using pixel sizes before computing MSD.
+    If 'pixels', use raw coordinate values.
+drift_correct : bool
+    If True, subtract per-timepoint field drift estimated from the mean
+    position of all spots in each FOV.
+drift_dims : tuple[str, ...] or None
+    Dimensions over which to average when estimating drift. If None,
+    defaults to ('track_id',) when present, otherwise all dims except
+    't', 'exp', and 'fov'.
+
+Notes
+-----
+Drift correction is applied separately within each FOV because the mean
+is not taken over 'exp' or 'fov'. The estimated drift trace is simply
+subtracted from each coordinate; any constant offset is irrelevant for MSD."""
+        return _impl_TrackArrayMeasure_msd(self.ds, xvar, yvar, zvar, name, space, drift_correct, drift_dims)
 
 
 TrackArrayMeasure.best_z_proj.__doc__ = _impl_TrackArrayMeasure_best_z_proj.__doc__
