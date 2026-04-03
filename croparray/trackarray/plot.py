@@ -435,9 +435,6 @@ def plot_track_signal_traces(
     # Determine whether this variable is channelled in the dataframe.
     has_ch = ("ch" in df.columns) and df["ch"].notna().any()
 
-    sns.set_style("whitegrid")
-    sns.set(font_scale=1.1)
-
     n = len(track_ids)
     ncols = int(col_wrap)
     nrows = int(math.ceil(n / ncols))
@@ -585,6 +582,8 @@ def plot_track_signal_traces(
     plt.tight_layout()
     plt.show()
 
+
+
 def trajectories_xy(
     self,
     xvar: str = "xc",
@@ -604,6 +603,9 @@ def trajectories_xy(
     time_var: str = "t",
     time_palette: str = "viridis",
     add_colorbar: bool = True,
+    label_tracks: bool = False,
+    label_offset: float = 0.1,
+    label_fontsize: float = 8,
     facet_kws: dict | None = None,
     **kwargs,
 ):
@@ -639,6 +641,13 @@ def trajectories_xy(
         Matplotlib colormap name for time coloring.
     add_colorbar : bool
         If True and color_time=True, add a shared colorbar.
+    label_tracks : bool
+        If True, label each trajectory at its first valid point using track_id.
+    label_offset : float
+        Offset added to x and y when placing trajectory labels.
+        Interpreted in plot coordinates.
+    label_fontsize : float
+        Font size for trajectory labels.
     facet_kws : dict or None
         Extra kwargs passed to seaborn.FacetGrid.
     **kwargs
@@ -649,7 +658,6 @@ def trajectories_xy(
     g : seaborn.FacetGrid
     """
     import numpy as np
-    import pandas as pd
     import seaborn as sns
     import xarray as xr
     import matplotlib.pyplot as plt
@@ -691,7 +699,6 @@ def trajectories_xy(
                 needed[v] = ds[v]
             elif v in ds.coords:
                 needed[v] = ds.coords[v]
-            # if v is already an index/dimension coord, reset_index will expose it
 
     if color_time and time_var in ds and time_var not in needed:
         needed[time_var] = ds[time_var]
@@ -736,9 +743,17 @@ def trajectories_xy(
         **facet_kws,
     )
 
+    def _track_label_from_traj_id(traj_id: str) -> str:
+        parts = [p.strip() for p in str(traj_id).split("|")]
+        return parts[-1] if len(parts) else str(traj_id)
+
     if not color_time:
         # standard single-color-per-track mode
         def _plot_lines(data, color=None, **kws):
+            import matplotlib.pyplot as plt
+
+            ax = plt.gca()
+
             sns.lineplot(
                 data=data,
                 x="_x",
@@ -748,15 +763,39 @@ def trajectories_xy(
                 hue=hue,
                 alpha=alpha,
                 linewidth=linewidth,
-                legend=False,   # we'll manage legend at grid level if needed
+                legend=False,
                 sort=False,
+                ax=ax,
                 **kwargs,
             )
+
+            if label_tracks:
+                for traj_id, sub in data.groupby("_traj_id", sort=False):
+                    sort_cols = [time_var] if time_var in sub.columns else []
+                    if sort_cols:
+                        sub = sub.sort_values(sort_cols)
+
+                    sub = sub.dropna(subset=["_x", "_y"])
+                    if len(sub) == 0:
+                        continue
+
+                    x0 = sub["_x"].iloc[0]
+                    y0 = sub["_y"].iloc[0]
+
+                    ax.text(
+                        x0 + label_offset,
+                        y0 + label_offset,
+                        _track_label_from_traj_id(traj_id),
+                        fontsize=label_fontsize,
+                        color=color if color is not None else "black",
+                        alpha=min(1.0, alpha + 0.2),
+                        ha="left",
+                        va="bottom",
+                    )
 
         g.map_dataframe(_plot_lines)
 
         if hue is not None and legend:
-            # add legend manually from the full grid mapping
             g.add_legend()
 
     else:
@@ -778,7 +817,7 @@ def trajectories_xy(
         def _plot_time_colored(data, **kws):
             ax = plt.gca()
 
-            for _, sub in data.groupby("_traj_id", sort=False):
+            for traj_id, sub in data.groupby("_traj_id", sort=False):
                 sub = sub.sort_values(time_var)
 
                 xvals = sub["_x"].to_numpy()
@@ -791,12 +830,24 @@ def trajectories_xy(
                 t = t[good]
 
                 if len(xvals) < 2:
+                    if label_tracks and len(xvals) == 1:
+                        t0 = t[0]
+                        label_color = cmap(norm(t0))
+                        ax.text(
+                            xvals[0] + label_offset,
+                            yvals[0] + label_offset,
+                            _track_label_from_traj_id(traj_id),
+                            fontsize=label_fontsize,
+                            color=label_color,
+                            alpha=min(1.0, alpha + 0.2),
+                            ha="left",
+                            va="bottom",
+                        )
                     continue
 
                 pts = np.column_stack([xvals, yvals]).reshape(-1, 1, 2)
                 segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
 
-                # color each segment by the starting timepoint
                 lc = LineCollection(
                     segs,
                     cmap=cmap,
@@ -807,24 +858,32 @@ def trajectories_xy(
                 lc.set_array(t[:-1])
                 ax.add_collection(lc)
 
+                if label_tracks:
+                    label_color = cmap(norm(t[0]))
+                    ax.text(
+                        xvals[0] + label_offset,
+                        yvals[0] + label_offset,
+                        _track_label_from_traj_id(traj_id),
+                        fontsize=label_fontsize,
+                        color=label_color,
+                        alpha=min(1.0, alpha + 0.2),
+                        ha="left",
+                        va="bottom",
+                    )
+
             ax.autoscale_view()
 
         g.map_dataframe(_plot_time_colored)
 
         if add_colorbar:
-            # --- create scalar mappable ---
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
 
-            # --- shrink main grid to make room ---
             g.figure.subplots_adjust(right=0.75)
-
-            # --- add dedicated colorbar axis (no overlap) ---
-            cax = g.figure.add_axes([0.95, 0.2, 0.02, 0.6])  # [left, bottom, width, height]
+            cax = g.figure.add_axes([0.95, 0.2, 0.02, 0.6])
 
             cbar = g.figure.colorbar(sm, cax=cax)
             cbar.set_label(time_var)
-
 
     # ---- axis labels ----
     xlabel = "x"

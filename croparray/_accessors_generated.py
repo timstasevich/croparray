@@ -1458,7 +1458,7 @@ None
     Displays the figure via matplotlib."""
         return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, legend_loc=legend_loc, show_legend=show_legend)
 
-    def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, color_time=False, time_var='t', time_palette='viridis', add_colorbar=True, facet_kws=None, **kwargs):
+    def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, color_time=False, time_var='t', time_palette='viridis', add_colorbar=True, label_tracks=False, label_offset=0.1, label_fontsize=8, facet_kws=None, **kwargs):
         """Plot XY trajectories with optional faceting and optional time-colored paths.
 
 Parameters
@@ -1490,6 +1490,13 @@ time_palette : str
     Matplotlib colormap name for time coloring.
 add_colorbar : bool
     If True and color_time=True, add a shared colorbar.
+label_tracks : bool
+    If True, label each trajectory at its first valid point using track_id.
+label_offset : float
+    Offset added to x and y when placing trajectory labels.
+    Interpreted in plot coordinates.
+label_fontsize : float
+    Font size for trajectory labels.
 facet_kws : dict or None
     Extra kwargs passed to seaborn.FacetGrid.
 **kwargs
@@ -1498,7 +1505,7 @@ facet_kws : dict or None
 Returns
 -------
 g : seaborn.FacetGrid"""
-        return _impl_TrackArrayPlot_trajectories_xy(self.ds, xvar, yvar, hue, col, row, space, center_tracks, alpha, linewidth, height, aspect, dropna, legend, color_time, time_var, time_palette, add_colorbar, facet_kws, **kwargs)
+        return _impl_TrackArrayPlot_trajectories_xy(self.ds, xvar, yvar, hue, col, row, space, center_tracks, alpha, linewidth, height, aspect, dropna, legend, color_time, time_var, time_palette, add_colorbar, label_tracks, label_offset, label_fontsize, facet_kws, **kwargs)
 
 
 TrackArrayPlot.montage.__doc__ = _impl_TrackArrayPlot_montage.__doc__
