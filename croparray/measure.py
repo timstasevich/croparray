@@ -3,7 +3,7 @@ import xarray as xr
 from scipy import ndimage as ndi
 from skimage.measure import label, regionprops
 
-__all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props", "mask_skeleton_length"]
+__all__ = ["best_z_proj", "measure_signal", "measure_signal_raw", "mask_props", "mask_skeleton_length", "auto_bad"]
 
 
 def best_z_proj(
@@ -658,4 +658,191 @@ def mask_skeleton_length(
         name=out_name,
     )
     ca[out_name] = da_out
+    return ca
+
+
+def _auto_bad_sidecar_path(ds, *, filter_name: str, output_dir: str | None = None) -> str | None:
+    """
+    Determine sidecar path for auto_bad, following the same __manual__ naming convention
+    as save_manual_filter_sidecar() in napari_view.py.
+
+    Returns None if no path information is available and output_dir is not given.
+    """
+    import os
+
+    fn_attr = ds.attrs.get("filename", None) if hasattr(ds, "attrs") else None
+    if isinstance(fn_attr, str) and fn_attr.strip():
+        base = os.path.basename(fn_attr.strip())
+        stem = base[:-3] if base.endswith(".nc") else base
+        src = ds.encoding.get("source", None)
+        default_dir = os.path.dirname(src) if isinstance(src, str) and src.strip() else os.getcwd()
+    else:
+        src = ds.encoding.get("source", None)
+        if isinstance(src, str) and src.strip():
+            base = os.path.basename(src)
+            stem = base[:-3] if base.endswith(".nc") else base
+            default_dir = os.path.dirname(src)
+        else:
+            if output_dir is None:
+                return None
+            stem = "dataset"
+            default_dir = output_dir
+
+    out_dir = output_dir if output_dir is not None else default_dir
+    return os.path.join(out_dir, f"{stem}__manual__{filter_name}.nc")
+
+
+def auto_bad(
+    ca,
+    *,
+    source: str,
+    ch: int | None = None,
+    area_factor: float | None = 2.0,
+    max_dist_px: float | None = None,
+    exclude_empty: bool = True,
+    out_name: str = "auto_bad",
+    save_sidecar: bool = True,
+    output_dir: str | None = None,
+):
+    """
+    Create an automatic 'bad' filter layer based on mask area and centroid offset.
+
+    A crop is marked as bad (output=0) if any of the following apply:
+      - mask area is 0 and exclude_empty=True
+      - mask area > area_factor * median(nonzero areas), if area_factor is not None
+      - mask centroid distance from crop center > max_dist_px pixels, if max_dist_px is not None
+
+    The output layer (out_name) has value 1 (good/keep) or 0 (bad/reject), matching the
+    convention used by manual_filter_montage(). When save_sidecar=True it is written as a
+    sidecar .nc file alongside the croparray (using the same {stem}__manual__{filter_name}.nc
+    naming), so it is automatically reloaded on next open and can be edited interactively
+    with ca.napari.manual_filter_montage().
+
+    Parameters
+    ----------
+    ca : CropArray-like
+    source : str
+        Name of the binary mask layer. Last two dims must be (y, x).
+    ch : int | None
+        If the mask has a 'ch' dimension, select this channel. If None and 'ch' is
+        present, defaults to the first channel value.
+    area_factor : float | None, default 2.0
+        Flag if area > area_factor * median(nonzero areas). None = skip area criterion.
+    max_dist_px : float | None, default None
+        Flag if centroid distance from crop center > max_dist_px pixels. None = skip.
+    exclude_empty : bool, default True
+        Also flag crops with an empty mask (area == 0) as bad.
+    out_name : str, default "auto_bad"
+        Name of the output layer added to ca.
+    save_sidecar : bool, default True
+        If True, save the filter as a sidecar .nc file alongside the croparray.
+    output_dir : str | None
+        Directory for the sidecar file. If None, uses the directory of the source .nc file.
+
+    Returns
+    -------
+    ca : updated with ca[out_name] (uint8, 1=good / 0=bad), dims matching the lead dims
+        of the source mask (everything except y, x, and ch if a channel was selected).
+    """
+    import os
+    import warnings
+
+    if source not in ca:
+        raise KeyError(f"source='{source}' not found. Available: {list(ca.data_vars)}")
+
+    da = ca[source]
+
+    # Handle ch dimension
+    if "ch" in da.dims:
+        ch_vals = (
+            da.coords["ch"].values if "ch" in da.coords
+            else list(range(da.sizes["ch"]))
+        )
+        if ch is None:
+            ch = int(ch_vals[0])
+        da = da.sel(ch=ch)
+
+    if da.ndim < 2:
+        raise ValueError(
+            f"After ch selection, mask must be at least 2D (y,x). Got dims={da.dims}"
+        )
+
+    # Last two dims are spatial (y, x)
+    lead_dims = da.dims[:-2]
+    lead_shape = da.shape[:-2]
+    H, W = da.shape[-2], da.shape[-1]
+    cy_center = H / 2.0
+    cx_center = W / 2.0
+
+    arr = np.asarray(da.data).astype(bool).reshape((-1, H, W))
+    N = arr.shape[0]
+
+    area = arr.reshape(N, -1).sum(axis=1).astype(float)
+
+    # Compute centroid distances only when needed
+    dist = np.full(N, np.nan)
+    if max_dist_px is not None:
+        for i in range(N):
+            m = arr[i]
+            if m.any():
+                cy, cx = ndi.center_of_mass(m.astype(np.uint8))
+                dist[i] = np.sqrt((cy - cy_center) ** 2 + (cx - cx_center) ** 2)
+
+    # Build bad mask (False = good, True = bad)
+    bad = np.zeros(N, dtype=bool)
+
+    if exclude_empty:
+        bad |= area == 0
+
+    if area_factor is not None:
+        nonzero_areas = area[area > 0]
+        if nonzero_areas.size > 0:
+            median_area = float(np.median(nonzero_areas))
+            bad |= area > float(area_factor) * median_area
+
+    if max_dist_px is not None:
+        bad |= np.where(np.isfinite(dist), dist > float(max_dist_px), False)
+
+    # Output: 1=good, 0=bad (matching manual filter convention)
+    out = (~bad).astype(np.uint8)
+
+    coords = {d: da.coords[d] for d in lead_dims if d in da.coords}
+    da_out = xr.DataArray(
+        out.reshape(lead_shape),
+        dims=lead_dims,
+        coords=coords,
+        name=out_name,
+    )
+    da_out.attrs["source_layer"] = source
+    da_out.attrs["long_name"] = f"auto bad filter (1=good, 0=bad) from '{source}'"
+    if area_factor is not None:
+        da_out.attrs["area_factor"] = float(area_factor)
+    if max_dist_px is not None:
+        da_out.attrs["max_dist_px"] = float(max_dist_px)
+    da_out.attrs["exclude_empty"] = int(exclude_empty)
+
+    ca[out_name] = da_out
+
+    if save_sidecar:
+        ds = ca.ds if hasattr(ca, "ds") else ca
+        sidecar_path = _auto_bad_sidecar_path(ds, filter_name=out_name, output_dir=output_dir)
+        if sidecar_path is None:
+            warnings.warn(
+                f"Could not determine croparray file path; sidecar for '{out_name}' was NOT saved. "
+                "Pass output_dir='...' to specify a save location, or open the croparray from a "
+                ".nc file so the path is known.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            out_ds = xr.Dataset({out_name: da_out})
+            src = ds.encoding.get("source", None)
+            if isinstance(src, str):
+                out_ds.attrs["croparray_source"] = src
+            out_ds.attrs["manual_filter_name"] = out_name
+            tmp = sidecar_path + ".tmp"
+            out_ds.to_netcdf(tmp, mode="w")
+            os.replace(tmp, sidecar_path)
+            print(f"[auto_bad] Saved sidecar: {sidecar_path}")
+
     return ca

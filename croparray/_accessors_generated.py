@@ -153,6 +153,7 @@ from croparray.measure import measure_signal as _impl_CropArrayMeasure_measure_s
 from croparray.measure import measure_signal_raw as _impl_CropArrayMeasure_measure_signal_raw
 from croparray.measure import mask_props as _impl_CropArrayMeasure_mask_props
 from croparray.measure import mask_skeleton_length as _impl_CropArrayMeasure_mask_skeleton_length
+from croparray.measure import auto_bad as _impl_CropArrayMeasure_auto_bad
 
 @dataclass
 class CropArrayMeasure(_BaseAccessor):
@@ -321,6 +322,47 @@ Notes
   two-pass Dijkstra diameter estimate on the skeleton graph."""
         return _impl_CropArrayMeasure_mask_skeleton_length(self.ds, source=source, out_prefix=out_prefix, method=method, connectivity=connectivity, empty_value=empty_value)
 
+    def auto_bad(self, source, ch=None, area_factor=2.0, max_dist_px=None, exclude_empty=True, out_name='auto_bad', save_sidecar=True, output_dir=None):
+        """Create an automatic 'bad' filter layer based on mask area and centroid offset.
+
+A crop is marked as bad (output=0) if any of the following apply:
+  - mask area is 0 and exclude_empty=True
+  - mask area > area_factor * median(nonzero areas), if area_factor is not None
+  - mask centroid distance from crop center > max_dist_px pixels, if max_dist_px is not None
+
+The output layer (out_name) has value 1 (good/keep) or 0 (bad/reject), matching the
+convention used by manual_filter_montage(). When save_sidecar=True it is written as a
+sidecar .nc file alongside the croparray (using the same {stem}__manual__{filter_name}.nc
+naming), so it is automatically reloaded on next open and can be edited interactively
+with ca.napari.manual_filter_montage().
+
+Parameters
+----------
+ca : CropArray-like
+source : str
+    Name of the binary mask layer. Last two dims must be (y, x).
+ch : int | None
+    If the mask has a 'ch' dimension, select this channel. If None and 'ch' is
+    present, defaults to the first channel value.
+area_factor : float | None, default 2.0
+    Flag if area > area_factor * median(nonzero areas). None = skip area criterion.
+max_dist_px : float | None, default None
+    Flag if centroid distance from crop center > max_dist_px pixels. None = skip.
+exclude_empty : bool, default True
+    Also flag crops with an empty mask (area == 0) as bad.
+out_name : str, default "auto_bad"
+    Name of the output layer added to ca.
+save_sidecar : bool, default True
+    If True, save the filter as a sidecar .nc file alongside the croparray.
+output_dir : str | None
+    Directory for the sidecar file. If None, uses the directory of the source .nc file.
+
+Returns
+-------
+ca : updated with ca[out_name] (uint8, 1=good / 0=bad), dims matching the lead dims
+    of the source mask (everything except y, x, and ch if a channel was selected)."""
+        return _impl_CropArrayMeasure_auto_bad(self.ds, source=source, ch=ch, area_factor=area_factor, max_dist_px=max_dist_px, exclude_empty=exclude_empty, out_name=out_name, save_sidecar=save_sidecar, output_dir=output_dir)
+
 
 CropArrayMeasure.best_z_proj.__doc__ = _impl_CropArrayMeasure_best_z_proj.__doc__
 CropArrayMeasure.best_z_proj.__wrapped__ = _impl_CropArrayMeasure_best_z_proj
@@ -337,6 +379,9 @@ CropArrayMeasure.mask_props.__signature__ = inspect.Signature(parameters=[inspec
 CropArrayMeasure.mask_skeleton_length.__doc__ = _impl_CropArrayMeasure_mask_skeleton_length.__doc__
 CropArrayMeasure.mask_skeleton_length.__wrapped__ = _impl_CropArrayMeasure_mask_skeleton_length
 CropArrayMeasure.mask_skeleton_length.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayMeasure_mask_skeleton_length).parameters.values())[1:])
+CropArrayMeasure.auto_bad.__doc__ = _impl_CropArrayMeasure_auto_bad.__doc__
+CropArrayMeasure.auto_bad.__wrapped__ = _impl_CropArrayMeasure_auto_bad
+CropArrayMeasure.auto_bad.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayMeasure_auto_bad).parameters.values())[1:])
 
 
 from croparray.dataframe import variables_to_df as _impl_CropArrayDF_variables_to_df
@@ -1542,6 +1587,7 @@ from croparray.measure import measure_signal as _impl_TrackArrayMeasure_measure_
 from croparray.measure import measure_signal_raw as _impl_TrackArrayMeasure_measure_signal_raw
 from croparray.measure import mask_props as _impl_TrackArrayMeasure_mask_props
 from croparray.measure import mask_skeleton_length as _impl_TrackArrayMeasure_mask_skeleton_length
+from croparray.measure import auto_bad as _impl_TrackArrayMeasure_auto_bad
 from croparray.trackarray.measure import tracklist as _impl_TrackArrayMeasure_tracklist
 from croparray.trackarray.measure import track_length as _impl_TrackArrayMeasure_track_length
 from croparray.trackarray.measure import step_size as _impl_TrackArrayMeasure_step_size
@@ -1714,6 +1760,47 @@ Notes
   two-pass Dijkstra diameter estimate on the skeleton graph."""
         return _impl_TrackArrayMeasure_mask_skeleton_length(self.ds, source=source, out_prefix=out_prefix, method=method, connectivity=connectivity, empty_value=empty_value)
 
+    def auto_bad(self, source, ch=None, area_factor=2.0, max_dist_px=None, exclude_empty=True, out_name='auto_bad', save_sidecar=True, output_dir=None):
+        """Create an automatic 'bad' filter layer based on mask area and centroid offset.
+
+A crop is marked as bad (output=0) if any of the following apply:
+  - mask area is 0 and exclude_empty=True
+  - mask area > area_factor * median(nonzero areas), if area_factor is not None
+  - mask centroid distance from crop center > max_dist_px pixels, if max_dist_px is not None
+
+The output layer (out_name) has value 1 (good/keep) or 0 (bad/reject), matching the
+convention used by manual_filter_montage(). When save_sidecar=True it is written as a
+sidecar .nc file alongside the croparray (using the same {stem}__manual__{filter_name}.nc
+naming), so it is automatically reloaded on next open and can be edited interactively
+with ca.napari.manual_filter_montage().
+
+Parameters
+----------
+ca : CropArray-like
+source : str
+    Name of the binary mask layer. Last two dims must be (y, x).
+ch : int | None
+    If the mask has a 'ch' dimension, select this channel. If None and 'ch' is
+    present, defaults to the first channel value.
+area_factor : float | None, default 2.0
+    Flag if area > area_factor * median(nonzero areas). None = skip area criterion.
+max_dist_px : float | None, default None
+    Flag if centroid distance from crop center > max_dist_px pixels. None = skip.
+exclude_empty : bool, default True
+    Also flag crops with an empty mask (area == 0) as bad.
+out_name : str, default "auto_bad"
+    Name of the output layer added to ca.
+save_sidecar : bool, default True
+    If True, save the filter as a sidecar .nc file alongside the croparray.
+output_dir : str | None
+    Directory for the sidecar file. If None, uses the directory of the source .nc file.
+
+Returns
+-------
+ca : updated with ca[out_name] (uint8, 1=good / 0=bad), dims matching the lead dims
+    of the source mask (everything except y, x, and ch if a channel was selected)."""
+        return _impl_TrackArrayMeasure_auto_bad(self.ds, source=source, ch=ch, area_factor=area_factor, max_dist_px=max_dist_px, exclude_empty=exclude_empty, out_name=out_name, save_sidecar=save_sidecar, output_dir=output_dir)
+
     def tracklist(self, var=None, min_count=1, return_mask=False):
         """List track_id values that have any non-null data (or >= min_count non-nulls)
 in this TrackArray dataset.
@@ -1811,6 +1898,9 @@ TrackArrayMeasure.mask_props.__signature__ = inspect.Signature(parameters=[inspe
 TrackArrayMeasure.mask_skeleton_length.__doc__ = _impl_TrackArrayMeasure_mask_skeleton_length.__doc__
 TrackArrayMeasure.mask_skeleton_length.__wrapped__ = _impl_TrackArrayMeasure_mask_skeleton_length
 TrackArrayMeasure.mask_skeleton_length.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_mask_skeleton_length).parameters.values())[1:])
+TrackArrayMeasure.auto_bad.__doc__ = _impl_TrackArrayMeasure_auto_bad.__doc__
+TrackArrayMeasure.auto_bad.__wrapped__ = _impl_TrackArrayMeasure_auto_bad
+TrackArrayMeasure.auto_bad.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_auto_bad).parameters.values())[1:])
 TrackArrayMeasure.tracklist.__doc__ = _impl_TrackArrayMeasure_tracklist.__doc__
 TrackArrayMeasure.tracklist.__wrapped__ = _impl_TrackArrayMeasure_tracklist
 TrackArrayMeasure.tracklist.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_tracklist).parameters.values())[1:])
