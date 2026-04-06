@@ -6,6 +6,8 @@ from .crop_array_object import CropArray
 import os
 from pathlib import Path
 from .trackarray.object import TrackArray
+
+PathLike = Union[str, Path]
 import re
 import json
 
@@ -94,11 +96,11 @@ def _merge_manual_filter_sidecars_track(ds: xr.Dataset, path_nc: str) -> xr.Data
     return xr.merge(to_merge, compat="override", join="outer")
 
 @overload
-def open_croparray(path: str, *, as_object: Literal[True] = True, **kwargs: Any) -> CropArray: ...
+def open_croparray(path: PathLike, *, as_object: Literal[True] = True, **kwargs: Any) -> CropArray: ...
 @overload
-def open_croparray(path: str, *, as_object: Literal[False], **kwargs: Any) -> xr.Dataset: ...
+def open_croparray(path: PathLike, *, as_object: Literal[False], **kwargs: Any) -> xr.Dataset: ...
 
-def open_croparray(path: str, *, as_object: bool = True, load_manual_filters: bool = True, **kwargs: Any) -> CropArray | xr.Dataset:
+def open_croparray(path: PathLike, *, as_object: bool = True, load_manual_filters: bool = True, **kwargs: Any) -> CropArray | xr.Dataset:
     """
     Open a saved CropArray dataset and optionally wrap it as a CropArray object.
 
@@ -285,7 +287,7 @@ def open_as_trackarray(
 
 @overload
 def open_trackarray(
-    path: str,
+    path: PathLike,
     *,
     as_object: Literal[True] = True,
     load_manual_filters: bool = True,
@@ -293,14 +295,14 @@ def open_trackarray(
 ) -> TrackArray: ...
 @overload
 def open_trackarray(
-    path: str,
+    path: PathLike,
     *,
     as_object: Literal[False],
     load_manual_filters: bool = True,
     **kwargs: Any,
 ) -> xr.Dataset: ...
 def open_trackarray(
-    path: str,
+    path: PathLike,
     *,
     as_object: bool = True,
     load_manual_filters: bool = True,

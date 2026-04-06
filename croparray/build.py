@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple, Union, Literal, Any, Dict
+from typing import Optional, Sequence, Tuple, Union, Literal, Any, Dict, overload, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .crop_array_object import CropArray
+    from .trackarray.object import TrackArray
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -1268,6 +1271,10 @@ def make_croparrays(
 
     return results[0] if len(results) == 1 else results
 
+@overload
+def open_measure_concat(*, groups: Any, dims: Sequence[str], labels: Optional[Sequence[Optional[Sequence[str]]]] = None, measure_kwargs: Optional[Dict[str, Any]] = None, drop_vars: Any = None, open_as: Literal["trackarray"], join: str = "outer", attach_provenance: bool = True) -> "TrackArray": ...
+@overload
+def open_measure_concat(*, groups: Any, dims: Sequence[str], labels: Optional[Sequence[Optional[Sequence[str]]]] = None, measure_kwargs: Optional[Dict[str, Any]] = None, drop_vars: Any = None, open_as: Literal["croparray"] = "croparray", join: str = "outer", attach_provenance: bool = True) -> "CropArray": ...
 def open_measure_concat(
     *,
     groups: Any,
@@ -1278,7 +1285,7 @@ def open_measure_concat(
     open_as: str = "croparray",
     join: str = "outer",
     attach_provenance: bool = True,
-):
+) -> "CropArray | TrackArray":
     """
     Open CropArray/TrackArray files, measure translation-site signal, optionally
     drop variables, and concatenate results into a single object.
