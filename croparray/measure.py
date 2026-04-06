@@ -741,7 +741,7 @@ def auto_bad(
 
     Returns
     -------
-    ca : updated with ca[out_name] (uint8, 1=good / 0=bad), dims matching the lead dims
+    ca : updated with ca[out_name] (uint8, 1=bad / 0=good), dims matching the lead dims
         of the source mask (everything except y, x, and ch if a channel was selected).
     """
     import os
@@ -803,8 +803,8 @@ def auto_bad(
     if max_dist_px is not None:
         bad |= np.where(np.isfinite(dist), dist > float(max_dist_px), False)
 
-    # Output: 1=good, 0=bad (matching manual filter convention)
-    out = (~bad).astype(np.uint8)
+    # Output: 1=bad, 0=good
+    out = bad.astype(np.uint8)
 
     coords = {d: da.coords[d] for d in lead_dims if d in da.coords}
     da_out = xr.DataArray(
@@ -814,7 +814,7 @@ def auto_bad(
         name=out_name,
     )
     da_out.attrs["source_layer"] = source
-    da_out.attrs["long_name"] = f"auto bad filter (1=good, 0=bad) from '{source}'"
+    da_out.attrs["long_name"] = f"auto bad filter (1=bad, 0=good) from '{source}'"
     if area_factor is not None:
         da_out.attrs["area_factor"] = float(area_factor)
     if max_dist_px is not None:
