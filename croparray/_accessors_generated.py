@@ -359,7 +359,7 @@ output_dir : str | None
 
 Returns
 -------
-ca : updated with ca[out_name] (uint8, 1=good / 0=bad), dims matching the lead dims
+ca : updated with ca[out_name] (uint8, 1=bad / 0=good), dims matching the lead dims
     of the source mask (everything except y, x, and ch if a channel was selected)."""
         return _impl_CropArrayMeasure_auto_bad(self.ds, source=source, ch=ch, area_factor=area_factor, max_dist_px=max_dist_px, exclude_empty=exclude_empty, out_name=out_name, save_sidecar=save_sidecar, output_dir=output_dir)
 
@@ -1797,7 +1797,7 @@ output_dir : str | None
 
 Returns
 -------
-ca : updated with ca[out_name] (uint8, 1=good / 0=bad), dims matching the lead dims
+ca : updated with ca[out_name] (uint8, 1=bad / 0=good), dims matching the lead dims
     of the source mask (everything except y, x, and ch if a channel was selected)."""
         return _impl_TrackArrayMeasure_auto_bad(self.ds, source=source, ch=ch, area_factor=area_factor, max_dist_px=max_dist_px, exclude_empty=exclude_empty, out_name=out_name, save_sidecar=save_sidecar, output_dir=output_dir)
 
