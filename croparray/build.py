@@ -1384,26 +1384,30 @@ def open_measure_concat(
         """
         Decide whether to use zc/z_pos as a selector.
 
-        Rule:
-        - If no 'zc' var -> False
-        - If 'zc' exists but is all-NaN (or non-finite) -> False
-        - Else -> True
+        Scenarios handled automatically:
+        - Scenario 1 (2D tracked, full z-stack): zc all same value (e.g. 0.0) → False
+        - Scenario 2 (3D tracked, full z-stack): zc genuinely varies → True
+        - Scenario 3 (2D tracked, single z plane): z size <= 1 → False
         """
         if ds is None or "zc" not in ds:
             return False
 
-        zc = ds["zc"]
+        # Single z plane — use_zc irrelevant, best_z just picks that plane
+        if "z" in ds.dims and ds.sizes["z"] <= 1:
+            return False
 
-        # Robust to dask/xarray: reduce without pulling full array unless needed
-        try:
-            # True if any finite value exists
-            any_finite = bool(np.isfinite(zc).any().item())
-        except Exception:
-            # Fallback: pull values (zc is typically small compared to int)
-            vals = np.asarray(zc.values)
-            any_finite = np.isfinite(vals).any()
+        vals = np.asarray(ds["zc"].values).ravel()
+        finite = vals[np.isfinite(vals)]
 
-        return any_finite
+        if len(finite) == 0:
+            return False
+
+        # 2D tracking sets zc=0.0 everywhere — constant value means no real z info
+        if np.all(finite == finite[0]):
+            return False
+
+        # zc genuinely varies → 3D tracked, use it
+        return True
 
     def _recurse(node: Any, level: int):
         dim = dims[level]
