@@ -205,9 +205,11 @@ def montage(ds: xr.Dataset, *, col: str = "t", row: str = "n", **kwargs) -> xr.D
         # Stack into pixel-plane montage dims
         out = out.stack(r=("montage_row", "y"), c=("montage_col", "x"))
 
-        # Keep your preferred transpose order; allow missing dims
+        # Keep preferred order; prepend any unknown dims (e.g. 'rna', 'znf') first
+        _known = {"cell", "rep", "exp", "tracks", "fov", "n", "t", "z", "r", "c", "ch"}
+        _extra = [d for d in out.dims if d not in _known]
         out = out.transpose(
-            "cell", "rep", "exp", "tracks", "fov", "n", "t", "z", "r", "c", "ch",
+            *_extra, "cell", "rep", "exp", "tracks", "fov", "n", "t", "z", "r", "c", "ch",
             missing_dims="ignore",
         )
         return out
@@ -251,10 +253,12 @@ def montage(ds: xr.Dataset, *, col: str = "t", row: str = "n", **kwargs) -> xr.D
         .unstack("montage")              # returns montage_row, montage_col as dims
         # Now stack into pixel-plane montage dims
         .stack(r=("montage_row", "y"), c=("montage_col", "x"))
-        .transpose(
-            "cell", "rep", "exp", "tracks", "fov", "n", "t", "z", "r", "c", "ch",
-            missing_dims="ignore",
-        )
+    )
+    _known = {"cell", "rep", "exp", "tracks", "fov", "n", "t", "z", "r", "c", "ch"}
+    _extra = [d for d in out.dims if d not in _known]
+    out = out.transpose(
+        *_extra, "cell", "rep", "exp", "tracks", "fov", "n", "t", "z", "r", "c", "ch",
+        missing_dims="ignore",
     )
 
     return out

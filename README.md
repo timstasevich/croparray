@@ -47,8 +47,14 @@ python -m ipykernel install --user --name croparray_env --display-name "Python (
 ---
 ### 6. Verify the installation
 ```bash
-python -c "import croparray, napari; print('croparray OK, napari', napari.__version__)"
+python -c "import croparray, napari, netCDF4; print('croparray OK, napari', napari.__version__, ', netCDF4', netCDF4.__version__)"
 ```
+
+> **Updating an existing environment**  
+> If you already have `croparray_env` installed, run the following to pick up new dependencies (like `netcdf4`):
+> ```bash
+> conda env update -f environment.yml --prune
+> ```
 
 
 ## Usage

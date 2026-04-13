@@ -15,6 +15,7 @@ dependencies:
   - pandas
   - scipy
   - xarray
+  - netcdf4
   - dask
   - scikit-image
   - imageio

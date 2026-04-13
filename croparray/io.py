@@ -442,8 +442,8 @@ def save_croparray(
             f"{out_path} already exists. Refusing to overwrite. Set overwrite=True to replace it."
         )
 
-    # Base kwargs
-    kwargs: dict[str, Any] = {}
+    # Base kwargs — default to NETCDF4 engine to avoid the 2GB NetCDF3 limit
+    kwargs: dict[str, Any] = {"format": "NETCDF4", "engine": "netcdf4"}
     if to_netcdf_kwargs:
         kwargs.update(to_netcdf_kwargs)
 
