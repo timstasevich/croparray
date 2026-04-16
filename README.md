@@ -57,6 +57,38 @@ python -c "import croparray, napari, netCDF4; print('croparray OK, napari', napa
 > ```
 
 
+## Alternative installation (if conda solver is slow or stuck)
+
+If `conda env create -f environment.yml` gets stuck on "Solving environment", use pip instead:
+
+### 1. Create a minimal conda environment with just Python 3.10
+```bash
+conda create -n croparray_env python=3.10 -y
+```
+
+### 2. Activate the environment
+```bash
+conda activate croparray_env
+```
+
+### 3. Install croparray in editable mode (installs all dependencies from requirements.txt)
+```bash
+pip install -e /path/to/croparray
+```
+
+### 4. Install napari separately (not in requirements.txt)
+```bash
+pip install "napari[all]>=0.6,<0.7"
+```
+
+### 5. Register the Jupyter kernel for VS Code
+```bash
+pip install ipykernel
+python -m ipykernel install --user --name croparray_env --display-name "Python (croparray_env)"
+```
+
+---
+
 ## Usage
 
 * Organizes crops and measurements of spots of interest from tif images in a convenient xarray format for reduced file size and more open and reproducible analyses.
