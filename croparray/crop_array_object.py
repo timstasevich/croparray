@@ -284,6 +284,8 @@ class CropArray:
         source: str = "int",
         z_select = "best",
         denoise = False,
+        mask_source = None,
+        mask_dilate: int = 0,
         limit_gaussian: int = 1000,
         progress: bool = True,
     ):
@@ -322,6 +324,11 @@ class CropArray:
         denoise : bool or int, default False
             Apply median filter before decomposition. True uses 3×3,
             int uses that as filter size.
+        mask_source : str, optional
+            Binary mask variable name (e.g. "ch0_mask"). Restricts
+            decomposition to the masked region.
+        mask_dilate : int, default 0
+            Pixels to dilate the mask before applying.
         limit_gaussian : int, default 1000
             Maximum gaussians to fit per crop.
         progress : bool, default True
@@ -349,6 +356,8 @@ class CropArray:
             source=source,
             z_select=z_select,
             denoise=denoise,
+            mask_source=mask_source,
+            mask_dilate=mask_dilate,
             limit_gaussian=limit_gaussian,
             add_to_ds=True,
             progress=progress,

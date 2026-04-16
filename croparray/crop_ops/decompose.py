@@ -221,6 +221,8 @@ def decompose_crops(
     source: str = "int",
     z_select: Optional[Union[int, str]] = "best",
     denoise: Union[bool, int] = False,
+    mask_source: Optional[str] = None,
+    mask_dilate: int = 0,
     limit_gaussian: int = 1000,
     add_to_ds: bool = True,
     progress: bool = True,
@@ -276,6 +278,13 @@ def decompose_crops(
         Apply a median filter to each crop before decomposition to remove
         hot pixels and noise. If ``True``, uses a 3×3 median filter.
         If an int, uses that as the filter size (must be odd).
+    mask_source : str, optional
+        Name of a binary mask variable in the dataset (e.g. ``"ch0_mask"``).
+        If provided, the crop image is multiplied by this mask before
+        decomposition, restricting fitting to the masked region only.
+    mask_dilate : int, default 0
+        Number of pixels to dilate the mask before applying. Useful to
+        add a small buffer around the mask boundary.
     limit_gaussian : int, default 1000
         Maximum number of gaussians to fit per crop.
     add_to_ds : bool, default True
@@ -419,6 +428,17 @@ def decompose_crops(
                     from scipy.ndimage import median_filter
                     filt_size = denoise if isinstance(denoise, int) and not isinstance(denoise, bool) else 3
                     img = median_filter(img, size=filt_size)
+
+                # Apply mask if provided
+                if mask_source is not None and mask_source in ds:
+                    from scipy.ndimage import binary_dilation
+                    mask_da = ds[mask_source].sel(fov=fov, n=n, t=t)
+                    if "ch" in mask_da.dims:
+                        mask_da = mask_da.isel(ch=0)
+                    mask_2d = mask_da.values > 0
+                    if mask_dilate > 0:
+                        mask_2d = binary_dilation(mask_2d, iterations=mask_dilate)
+                    img = img * mask_2d
 
                 # Skip empty crops
                 if img.max() <= 0:

@@ -20,6 +20,7 @@ dependencies:
   - imageio
   - tifffile
   - trackpy
+  - bigfish
   - tqdm
   - matplotlib
   - seaborn
