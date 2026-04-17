@@ -732,19 +732,32 @@ def review_thresholds(
         description="minmass:", continuous_update=False,
         layout=widgets.Layout(width="600px"),
     )
-    img_widget = widgets.Image(format="png", layout=widgets.Layout(width="800px"))
+    img_widget = widgets.Image(format="png", layout=widgets.Layout(width="100%", max_width="1200px"))
+    contrast_lo = widgets.FloatSlider(
+        value=0.5, min=0.0, max=10.0, step=0.1,
+        description="contrast lo%:", continuous_update=False,
+        layout=widgets.Layout(width="600px"),
+    )
+    contrast_hi = widgets.FloatSlider(
+        value=99.5, min=90.0, max=100.0, step=0.1,
+        description="contrast hi%:", continuous_update=False,
+        layout=widgets.Layout(width="600px"),
+    )
 
     def draw(vd, thresh):
         import io
         import matplotlib.pyplot as plt
         filtered = vd["all_spots"][vd["all_spots"]["mass"] >= thresh] \
             if len(vd["all_spots"]) > 0 else vd["all_spots"]
+        vmin = float(np.percentile(vd["frame"], contrast_lo.value))
+        vmax = float(np.percentile(vd["frame"], contrast_hi.value))
         with plt.ioff():
             fig, (ax_frame, ax_elbow) = plt.subplots(
-                1, 2, figsize=(10, 4),
-                gridspec_kw={"width_ratios": [2, 1]},
+                1, 2, figsize=(12, 6),
+                gridspec_kw={"width_ratios": [8, 2]},
             )
             tp.annotate(filtered, vd["frame"], ax=ax_frame,
+                        imshow_style={"vmin": vmin, "vmax": vmax, "cmap": "gray"},
                         plot_style={"markersize": 6, "markeredgewidth": 1})
             ax_frame.set_title(f"{len(filtered)} spots  |  minmass={thresh:.0f}", fontsize=9)
             ax_frame.set_xticks([]); ax_frame.set_yticks([])
@@ -779,11 +792,17 @@ def review_thresholds(
         result[vd["path"].name] = float(change["new"])
         draw(vd, change["new"])
 
+    def on_contrast(change):
+        vd = precomp[names.index(dropdown.value)]
+        draw(vd, result[vd["path"].name])
+
     dropdown.observe(on_dropdown, names="value")
     slider.observe(on_slider, names="value")
+    contrast_lo.observe(on_contrast, names="value")
+    contrast_hi.observe(on_contrast, names="value")
 
     draw(vd0, vd0["auto_thresh"])
-    display(widgets.VBox([dropdown, img_widget, slider]))
+    display(widgets.VBox([dropdown, img_widget, slider, contrast_lo, contrast_hi]))
 
     return result
 
