@@ -24,7 +24,14 @@ git clone https://github.com/timstasevich/croparray.git
 cd croparray
 ```
 
-### 3. Create the environment from `environment.yml`
+### 3. (Recommended) Switch conda to the fast libmamba solver
+If you haven't already, do this once — it dramatically speeds up environment solving and prevents the solver from stalling on complex environments like this one:
+```bash
+conda install -n base conda-libmamba-solver
+conda config --set solver libmamba
+```
+
+### 4. Create the environment from `environment.yml`
 ```bash
 conda env create -f environment.yml
 conda activate croparray_env
@@ -34,18 +41,18 @@ conda activate croparray_env
 > If you modify the environment or Python version, ensure that Napari remains compatible.
 
 
-### 4. Install croparray (editable mode)
+### 5. Install croparray (editable mode)
 ```bash
 python -m pip install -e . --no-deps
 ```
 
-### 5. (Optional) Register the Jupyter kernel (recommended for VS Code / notebooks)
+### 6. (Optional) Register the Jupyter kernel (recommended for VS Code / notebooks)
 ```bash
 python -m ipykernel install --user --name croparray_env --display-name "Python (croparray_env)"
 ```
 
 ---
-### 6. Verify the installation
+### 7. Verify the installation
 ```bash
 python -c "import croparray, napari, netCDF4; print('croparray OK, napari', napari.__version__, ', netCDF4', netCDF4.__version__)"
 ```
