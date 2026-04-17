@@ -1150,8 +1150,9 @@ def _create_crop_array_dataset(video, df, **kwargs):
         # keep a float column for uniformity
         df["zc"] = np.nan
 
-    # slab mode only if z_pad>0 and zc column exists
-    use_z_slab = (z_pad > 0) and has_zc
+    # slab mode only if z_pad>0 and zc genuinely varies (constant zc = 2D tracking → use all z)
+    zc_varies = has_zc and df["zc"].dropna().nunique() > 1
+    use_z_slab = (z_pad > 0) and zc_varies
 
     # ------------
     # video dims
