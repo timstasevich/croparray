@@ -9,6 +9,7 @@ dependencies:
   # Jupyter / VS Code
   - ipykernel
   - jupyterlab
+  - ipywidgets
 
   # Scientific stack
   - numpy

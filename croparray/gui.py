@@ -300,8 +300,14 @@ def define_video_axes(
         layout="vertical",
     )
 
-    # show window
+    # show window and force it to the front (WindowStaysOnTopHint is most reliable on Windows)
+    from qtpy.QtCore import Qt
+    container.native.setWindowFlags(
+        container.native.windowFlags() | Qt.WindowStaysOnTopHint
+    )
     container.show()
+    container.native.raise_()
+    container.native.activateWindow()
 
     if block:
         app = QApplication.instance()

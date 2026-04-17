@@ -839,6 +839,10 @@ from croparray.build import standardize_spots as _impl_CropArrayBuild_standardiz
 from croparray.build import create_crop_array as _impl_CropArrayBuild_create_crop_array
 from croparray.build import make_croparrays as _impl_CropArrayBuild_make_croparrays
 from croparray.build import open_measure_concat as _impl_CropArrayBuild_open_measure_concat
+from croparray.build import auto_minmass as _impl_CropArrayBuild_auto_minmass
+from croparray.build import preview_detection as _impl_CropArrayBuild_preview_detection
+from croparray.build import review_thresholds as _impl_CropArrayBuild_review_thresholds
+from croparray.build import make_csvs as _impl_CropArrayBuild_make_csvs
 
 @dataclass
 class CropArrayBuild(_BaseAccessor):
@@ -1129,6 +1133,99 @@ Notes
   and other accessor functions to remain available."""
         return _impl_CropArrayBuild_open_measure_concat(groups=groups, dims=dims, labels=labels, measure_kwargs=measure_kwargs, drop_vars=drop_vars, open_as=open_as, join=join, attach_provenance=attach_provenance)
 
+    def auto_minmass(self, frames, diameter, n_thresholds=50, percentile=64, separation=None, n_sample_frames=10, max_spots=200):
+        """Automatically select a TrackPy ``minmass`` threshold using the knee/elbow
+of the spots-detected-vs-threshold curve (same concept as BigFISH auto-threshold).
+
+The approach:
+  1. Detect all spots with ``minmass=0`` on a sample of frames.
+  2. Scan log-spaced thresholds from the 1st to the 99th percentile of spot masses.
+  3. Find the knee (max curvature / Kneedle method).
+  4. Also find the threshold that gives ``max_spots`` detections per frame.
+  5. Return whichever is more conservative (higher threshold), so the result
+     never exceeds ``max_spots`` spots per frame.
+
+Parameters
+----------
+frames
+    A 2D numpy array (single frame) or a 3D array (t, y, x).
+diameter
+    Spot diameter in pixels (odd integer).
+n_thresholds
+    Number of threshold values to try (log-spaced).
+percentile
+    TrackPy ``percentile`` argument passed to ``tp.locate``.
+separation
+    TrackPy ``separation`` argument. ``None`` uses TrackPy default (= diameter).
+n_sample_frames
+    Max frames to sample when ``frames`` is 3D.
+max_spots
+    Safety cap: if the knee threshold would detect more than this many spots
+    per frame on average, raise the threshold until the count is at or below
+    this value.  Default 200.
+
+Returns
+-------
+float
+    Recommended ``minmass`` threshold."""
+        return _impl_CropArrayBuild_auto_minmass(frames, diameter, n_thresholds=n_thresholds, percentile=percentile, separation=separation, n_sample_frames=n_sample_frames, max_spots=max_spots)
+
+    def preview_detection(self, video_path, detect_ch=0, axes=None, define_axes=True, diameter=7, minmass='auto', separation=None, percentile=64, frame_index=None, max_spots=200):
+        """Show the minmass elbow curve and an annotated frame side-by-side for one video.
+Use this to tune DIAMETER and MINMASS before running make_csvs."""
+        return _impl_CropArrayBuild_preview_detection(video_path, detect_ch=detect_ch, axes=axes, define_axes=define_axes, diameter=diameter, minmass=minmass, separation=separation, percentile=percentile, frame_index=frame_index, max_spots=max_spots)
+
+    def review_thresholds(self, videos, detect_ch=0, axes=None, define_axes=True, axes_source_index=0, diameter=7, percentile=64, separation=None, frame_index=None, max_spots=200, n_thresholds=50):
+        """Interactive GUI to review and adjust per-video minmass thresholds.
+
+Shows one video at a time: annotated frame (left) + elbow curve (right),
+with a dropdown to switch between videos and a slider to adjust minmass.
+Updating the slider re-filters pre-detected spots instantly.
+
+Returns a dict {filename: threshold} for use with make_csvs(minmass=...)."""
+        return _impl_CropArrayBuild_review_thresholds(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, diameter=diameter, percentile=percentile, separation=separation, frame_index=frame_index, max_spots=max_spots, n_thresholds=n_thresholds)
+
+    def make_csvs(self, videos, detect_ch=0, axes=None, define_axes=True, axes_source_index=0, diameter=7, minmass='auto', separation=None, percentile=64, track=True, search_range=5, memory=2, min_track_len=3, out_dir=None, out_suffix='_allspots', skip_existing=True, progress=True):
+        """Detect spots with TrackPy and save one CSV per video, ready for make_croparrays.
+
+Parameters
+----------
+videos
+    A single path or a list of paths to .tif files.
+detect_ch
+    Channel index (0-based) to use for spot detection.
+axes
+    Axis order string, e.g. 'tcyx'. If None and define_axes=True, opens the
+    axis-labeling GUI on the video at axes_source_index.
+define_axes
+    If True and axes is None, open the GUI to label axes once for the whole batch.
+axes_source_index
+    Which video to use when opening the GUI (default 0).
+diameter
+    Spot diameter in pixels (odd integer).
+minmass
+    Minimum integrated brightness threshold. 'auto' uses auto_minmass per video.
+track
+    If True, link spots into tracks with tp.link and filter short ones.
+search_range
+    Max displacement (pixels) between frames for tp.link.
+memory
+    Frames a spot may disappear and still be linked.
+min_track_len
+    Discard tracks shorter than this (frames).
+out_dir
+    Directory for CSV output. Defaults to each video's parent directory.
+out_suffix
+    String appended to the video stem before '.csv'.
+skip_existing
+    If True, skip videos whose output CSV already exists.
+
+Returns
+-------
+list of Path
+    Paths of written CSV files."""
+        return _impl_CropArrayBuild_make_csvs(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, diameter=diameter, minmass=minmass, separation=separation, percentile=percentile, track=track, search_range=search_range, memory=memory, min_track_len=min_track_len, out_dir=out_dir, out_suffix=out_suffix, skip_existing=skip_existing, progress=progress)
+
 
 CropArrayBuild.standardize_video_axes.__doc__ = _impl_CropArrayBuild_standardize_video_axes.__doc__
 CropArrayBuild.standardize_video_axes.__wrapped__ = _impl_CropArrayBuild_standardize_video_axes
@@ -1145,6 +1242,18 @@ CropArrayBuild.make_croparrays.__signature__ = inspect.Signature(parameters=[ins
 CropArrayBuild.open_measure_concat.__doc__ = _impl_CropArrayBuild_open_measure_concat.__doc__
 CropArrayBuild.open_measure_concat.__wrapped__ = _impl_CropArrayBuild_open_measure_concat
 CropArrayBuild.open_measure_concat.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_open_measure_concat).parameters.values()))
+CropArrayBuild.auto_minmass.__doc__ = _impl_CropArrayBuild_auto_minmass.__doc__
+CropArrayBuild.auto_minmass.__wrapped__ = _impl_CropArrayBuild_auto_minmass
+CropArrayBuild.auto_minmass.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_auto_minmass).parameters.values()))
+CropArrayBuild.preview_detection.__doc__ = _impl_CropArrayBuild_preview_detection.__doc__
+CropArrayBuild.preview_detection.__wrapped__ = _impl_CropArrayBuild_preview_detection
+CropArrayBuild.preview_detection.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_preview_detection).parameters.values()))
+CropArrayBuild.review_thresholds.__doc__ = _impl_CropArrayBuild_review_thresholds.__doc__
+CropArrayBuild.review_thresholds.__wrapped__ = _impl_CropArrayBuild_review_thresholds
+CropArrayBuild.review_thresholds.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_review_thresholds).parameters.values()))
+CropArrayBuild.make_csvs.__doc__ = _impl_CropArrayBuild_make_csvs.__doc__
+CropArrayBuild.make_csvs.__wrapped__ = _impl_CropArrayBuild_make_csvs
+CropArrayBuild.make_csvs.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_make_csvs).parameters.values()))
 
 
 from croparray.io import save_croparray as _impl_CropArrayIO_save_croparray

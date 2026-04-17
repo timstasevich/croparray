@@ -12,7 +12,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
-__all__ = ["standardize_video_axes","standardize_spots", "create_crop_array", "make_croparrays", "open_measure_concat"]
+__all__ = ["standardize_video_axes","standardize_spots", "create_crop_array", "make_croparrays", "open_measure_concat", "auto_minmass", "preview_detection", "review_thresholds", "make_csvs"]
 
 _CANONICAL = ("fov", "f", "z", "y", "x", "ch")
 
@@ -463,6 +463,456 @@ def standardize_spots(
         units=units,
         require_calibration_if_needed=require_calibration_if_needed,
     )
+
+def auto_minmass(
+    frames,
+    diameter: int,
+    *,
+    n_thresholds: int = 50,
+    percentile: int = 64,
+    separation: Optional[int] = None,
+    n_sample_frames: int = 10,
+    max_spots: int = 200,
+) -> float:
+    """
+    Automatically select a TrackPy ``minmass`` threshold using the knee/elbow
+    of the spots-detected-vs-threshold curve (same concept as BigFISH auto-threshold).
+
+    The approach:
+      1. Detect all spots with ``minmass=0`` on a sample of frames.
+      2. Scan log-spaced thresholds from the 1st to the 99th percentile of spot masses.
+      3. Find the knee (max curvature / Kneedle method).
+      4. Also find the threshold that gives ``max_spots`` detections per frame.
+      5. Return whichever is more conservative (higher threshold), so the result
+         never exceeds ``max_spots`` spots per frame.
+
+    Parameters
+    ----------
+    frames
+        A 2D numpy array (single frame) or a 3D array (t, y, x).
+    diameter
+        Spot diameter in pixels (odd integer).
+    n_thresholds
+        Number of threshold values to try (log-spaced).
+    percentile
+        TrackPy ``percentile`` argument passed to ``tp.locate``.
+    separation
+        TrackPy ``separation`` argument. ``None`` uses TrackPy default (= diameter).
+    n_sample_frames
+        Max frames to sample when ``frames`` is 3D.
+    max_spots
+        Safety cap: if the knee threshold would detect more than this many spots
+        per frame on average, raise the threshold until the count is at or below
+        this value.  Default 200.
+
+    Returns
+    -------
+    float
+        Recommended ``minmass`` threshold.
+    """
+    try:
+        import trackpy as tp
+    except ImportError as e:
+        raise ImportError("trackpy is required for auto_minmass. Install with: conda install -c conda-forge trackpy") from e
+
+    frames = np.asarray(frames)
+    if frames.ndim == 2:
+        sample = [frames]
+        n_frames_sampled = 1
+    else:
+        n = frames.shape[0]
+        idx = np.linspace(0, n - 1, min(n, n_sample_frames), dtype=int)
+        sample = [frames[i] for i in idx]
+        n_frames_sampled = len(idx)
+
+    pieces = []
+    for f in sample:
+        spots = tp.locate(f, diameter=diameter, minmass=0,
+                          separation=separation, percentile=percentile)
+        pieces.append(spots)
+
+    all_spots = pd.concat(pieces, ignore_index=True) if len(pieces) > 1 else pieces[0]
+
+    if len(all_spots) == 0:
+        return 0.0
+
+    masses = all_spots["mass"].values
+    lo = float(np.percentile(masses, 1))
+    hi = float(np.percentile(masses, 99))
+
+    if hi <= lo:
+        return lo
+
+    thresholds = np.logspace(np.log10(max(lo, 1.0)), np.log10(hi), n_thresholds)
+    # counts per frame (average across sampled frames)
+    counts = np.array([(masses >= t).sum() for t in thresholds], dtype=float) / n_frames_sampled
+
+    # Knee: max distance from diagonal
+    x = (thresholds - thresholds[0]) / (thresholds[-1] - thresholds[0])
+    denom = counts[0] - counts[-1]
+    y = (counts - counts[-1]) / (denom if denom > 0 else 1.0)
+    distances = np.abs(x + y - 1.0) / np.sqrt(2.0)
+    knee_thresh = float(thresholds[int(np.argmax(distances))])
+
+    # Safety cap: find the lowest threshold where avg spots/frame <= max_spots
+    below = np.where(counts <= max_spots)[0]
+    cap_thresh = float(thresholds[below[0]]) if len(below) > 0 else float(thresholds[-1])
+
+    return max(knee_thresh, cap_thresh)
+
+
+def _load_detect_channel(path, axes: str, detect_ch: int) -> "np.ndarray":
+    """Load a .tif and return (n_frames, y, x) for a single channel, max-projecting z if present."""
+    from tifffile import imread
+    vid = imread(path)
+    axes = axes.lower()
+    if 'c' in axes:
+        vid = np.take(vid, detect_ch, axis=axes.index('c'))
+        axes = axes.replace('c', '')
+    if 'z' in axes:
+        vid = vid.max(axis=axes.index('z'))
+        axes = axes.replace('z', '')
+    return vid  # (t, y, x)
+
+
+def preview_detection(
+    video_path,
+    *,
+    detect_ch: int = 0,
+    axes: Optional[str] = None,
+    define_axes: bool = True,
+    diameter: int = 7,
+    minmass: "Union[float, str]" = "auto",
+    separation: Optional[int] = None,
+    percentile: int = 64,
+    frame_index: Optional[int] = None,
+    max_spots: int = 200,
+) -> None:
+    """
+    Show the minmass elbow curve and an annotated frame side-by-side for one video.
+    Use this to tune DIAMETER and MINMASS before running make_csvs.
+    """
+    try:
+        import trackpy as tp
+        import matplotlib.pyplot as plt
+    except ImportError as e:
+        raise ImportError("trackpy and matplotlib are required for preview_detection.") from e
+
+    axes_use = axes
+    if axes_use is None and define_axes:
+        from . import gui as _gui
+        axes_use = "".join(_gui.define_video_axes(path=video_path).axes)
+
+    vid = _load_detect_channel(video_path, axes_use, detect_ch)
+    auto_thresh = auto_minmass(vid, diameter, percentile=percentile, separation=separation,
+                               max_spots=max_spots)
+    thresh = auto_thresh if minmass == "auto" else float(minmass)
+
+    # elbow curve data
+    n = len(vid)
+    idx = np.linspace(0, n - 1, min(n, 10), dtype=int)
+    all_spots = pd.concat(
+        [tp.locate(vid[i], diameter=diameter, minmass=0,
+                   separation=separation, percentile=percentile) for i in idx],
+        ignore_index=True,
+    )
+    masses = all_spots["mass"].values
+    thresholds = np.logspace(
+        np.log10(max(float(np.percentile(masses, 1)), 1.0)),
+        np.log10(float(np.percentile(masses, 99))),
+        50,
+    )
+    counts = [(masses >= t).sum() for t in thresholds]
+
+    fi = frame_index if frame_index is not None else n // 2
+    frame_spots = tp.locate(vid[fi], diameter=diameter, minmass=thresh,
+                             separation=separation, percentile=percentile)
+
+    fig, axes_ax = plt.subplots(1, 2, figsize=(12, 5))
+
+    axes_ax[0].plot(thresholds, counts, "k-")
+    axes_ax[0].axvline(auto_thresh, color="r", linestyle="--", label=f"auto = {auto_thresh:.0f}")
+    if minmass != "auto":
+        axes_ax[0].axvline(thresh, color="b", linestyle=":", label=f"manual = {thresh:.0f}")
+    axes_ax[0].set_xscale("log")
+    axes_ax[0].set_xlabel("minmass threshold")
+    axes_ax[0].set_ylabel("spots detected")
+    axes_ax[0].set_title("Elbow curve")
+    axes_ax[0].legend()
+
+    tp.annotate(frame_spots, vid[fi], ax=axes_ax[1], plot_style={"markersize": 8})
+    axes_ax[1].set_title(f"Frame {fi}  —  {len(frame_spots)} spots at minmass={thresh:.0f}")
+
+    fig.suptitle(Path(video_path).name, fontsize=10)
+    plt.tight_layout()
+    print(f"Auto-detected minmass: {auto_thresh:.1f}  |  Using: {thresh:.1f}")
+
+
+def review_thresholds(
+    videos,
+    *,
+    detect_ch: int = 0,
+    axes: Optional[str] = None,
+    define_axes: bool = True,
+    axes_source_index: int = 0,
+    diameter: int = 7,
+    percentile: int = 64,
+    separation: Optional[int] = None,
+    frame_index: Optional[int] = None,
+    max_spots: int = 200,
+    n_thresholds: int = 50,
+) -> dict:
+    """
+    Interactive GUI to review and adjust per-video minmass thresholds.
+
+    Shows one video at a time: annotated frame (left) + elbow curve (right),
+    with a dropdown to switch between videos and a slider to adjust minmass.
+    Updating the slider re-filters pre-detected spots instantly.
+
+    Returns a dict {filename: threshold} for use with make_csvs(minmass=...).
+    """
+    try:
+        import trackpy as tp
+        import ipywidgets as widgets
+        from IPython.display import display, clear_output
+    except ImportError as e:
+        raise ImportError("trackpy, ipywidgets, and matplotlib are required.") from e
+
+    def _as_list(x):
+        if isinstance(x, (str, Path)):
+            return [x]
+        return list(x)
+
+    video_list = _as_list(videos)
+
+    axes_use = axes
+    if axes_use is None and define_axes:
+        from . import gui as _gui
+        axes_use = "".join(_gui.define_video_axes(path=video_list[axes_source_index]).axes)
+
+    result = {}
+
+    print("Pre-detecting spots (minmass=0) on sample frame for each video...")
+    precomp = []
+    for vid_path in video_list:
+        vid_path = Path(vid_path)
+        vid = _load_detect_channel(vid_path, axes_use, detect_ch)
+        fi = frame_index if frame_index is not None else len(vid) // 2
+        frame = vid[fi]
+
+        all_spots = tp.locate(frame, diameter=diameter, minmass=0,
+                              separation=separation, percentile=percentile)
+
+        auto_thresh = auto_minmass(vid, diameter, percentile=percentile,
+                                   separation=separation, max_spots=max_spots)
+
+        masses = all_spots["mass"].values if len(all_spots) > 0 else np.array([1.0])
+        lo = max(float(np.percentile(masses, 1)), 1.0)
+        hi = float(np.percentile(masses, 99))
+        thresholds = np.logspace(np.log10(lo), np.log10(max(hi, lo * 2)), n_thresholds)
+        counts = np.array([(masses >= t).sum() for t in thresholds])
+
+        result[vid_path.name] = float(auto_thresh)
+        precomp.append(dict(path=vid_path, frame=frame, all_spots=all_spots,
+                            auto_thresh=float(auto_thresh), masses=masses,
+                            thresholds=thresholds, counts=counts))
+
+    print("Done. Adjust sliders; plots update on release.")
+
+    # --- widgets ---
+    names = [vd["path"].name for vd in precomp]
+    dropdown = widgets.Dropdown(options=names, description="Video:",
+                                layout=widgets.Layout(width="600px"))
+
+    vd0 = precomp[0]
+    lo0 = float(np.log10(max(vd0["masses"].min(), 1.0)))
+    hi0 = float(np.log10(vd0["masses"].max()))
+    slider = widgets.FloatLogSlider(
+        value=vd0["auto_thresh"], base=10, min=lo0, max=hi0, step=0.01,
+        description="minmass:", continuous_update=False,
+        layout=widgets.Layout(width="600px"),
+    )
+    img_widget = widgets.Image(format="png", layout=widgets.Layout(width="800px"))
+
+    def draw(vd, thresh):
+        import io
+        import matplotlib.pyplot as plt
+        filtered = vd["all_spots"][vd["all_spots"]["mass"] >= thresh] \
+            if len(vd["all_spots"]) > 0 else vd["all_spots"]
+        with plt.ioff():
+            fig, (ax_frame, ax_elbow) = plt.subplots(
+                1, 2, figsize=(10, 4),
+                gridspec_kw={"width_ratios": [2, 1]},
+            )
+            tp.annotate(filtered, vd["frame"], ax=ax_frame,
+                        plot_style={"markersize": 6, "markeredgewidth": 1})
+            ax_frame.set_title(f"{len(filtered)} spots  |  minmass={thresh:.0f}", fontsize=9)
+            ax_frame.set_xticks([]); ax_frame.set_yticks([])
+            ax_elbow.plot(vd["thresholds"], vd["counts"], "k-", lw=1.5)
+            ax_elbow.axvline(thresh, color="r", linestyle="--", lw=1.5,
+                             label=f"{thresh:.0f}")
+            ax_elbow.axvline(vd["auto_thresh"], color="gray", linestyle=":",
+                             lw=1, alpha=0.7, label=f"auto={vd['auto_thresh']:.0f}")
+            ax_elbow.set_xscale("log")
+            ax_elbow.set_xlabel("minmass", fontsize=9)
+            ax_elbow.set_ylabel("spots", fontsize=9)
+            ax_elbow.legend(fontsize=8)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+            plt.close(fig)
+        buf.seek(0)
+        img_widget.value = buf.read()
+
+    def on_dropdown(change):
+        vd = precomp[names.index(change["new"])]
+        lo = float(np.log10(max(vd["masses"].min(), 1.0)))
+        hi = float(np.log10(vd["masses"].max()))
+        slider.unobserve(on_slider, names="value")
+        slider.min, slider.max = lo, hi
+        slider.value = vd["auto_thresh"]
+        slider.observe(on_slider, names="value")
+        draw(vd, vd["auto_thresh"])
+
+    def on_slider(change):
+        vd = precomp[names.index(dropdown.value)]
+        result[vd["path"].name] = float(change["new"])
+        draw(vd, change["new"])
+
+    dropdown.observe(on_dropdown, names="value")
+    slider.observe(on_slider, names="value")
+
+    draw(vd0, vd0["auto_thresh"])
+    display(widgets.VBox([dropdown, img_widget, slider]))
+
+    return result
+
+
+def make_csvs(
+    videos,
+    *,
+    detect_ch: int = 0,
+    axes: Optional[str] = None,
+    define_axes: bool = True,
+    axes_source_index: int = 0,
+    diameter: int = 7,
+    minmass: "Union[float, str]" = "auto",
+    separation: Optional[int] = None,
+    percentile: int = 64,
+    track: bool = True,
+    search_range: float = 5,
+    memory: int = 2,
+    min_track_len: int = 3,
+    out_dir: Optional[Union[str, Path]] = None,
+    out_suffix: str = "_allspots",
+    skip_existing: bool = True,
+    progress: bool = True,
+) -> list:
+    """
+    Detect spots with TrackPy and save one CSV per video, ready for make_croparrays.
+
+    Parameters
+    ----------
+    videos
+        A single path or a list of paths to .tif files.
+    detect_ch
+        Channel index (0-based) to use for spot detection.
+    axes
+        Axis order string, e.g. 'tcyx'. If None and define_axes=True, opens the
+        axis-labeling GUI on the video at axes_source_index.
+    define_axes
+        If True and axes is None, open the GUI to label axes once for the whole batch.
+    axes_source_index
+        Which video to use when opening the GUI (default 0).
+    diameter
+        Spot diameter in pixels (odd integer).
+    minmass
+        Minimum integrated brightness threshold. 'auto' uses auto_minmass per video.
+    track
+        If True, link spots into tracks with tp.link and filter short ones.
+    search_range
+        Max displacement (pixels) between frames for tp.link.
+    memory
+        Frames a spot may disappear and still be linked.
+    min_track_len
+        Discard tracks shorter than this (frames).
+    out_dir
+        Directory for CSV output. Defaults to each video's parent directory.
+    out_suffix
+        String appended to the video stem before '.csv'.
+    skip_existing
+        If True, skip videos whose output CSV already exists.
+
+    Returns
+    -------
+    list of Path
+        Paths of written CSV files.
+    """
+    try:
+        import trackpy as tp
+    except ImportError as e:
+        raise ImportError("trackpy is required for make_csvs. Install with: conda install -c conda-forge trackpy") from e
+
+    try:
+        from tqdm.auto import tqdm
+    except Exception:
+        tqdm = None
+
+    def _as_list(x):
+        if isinstance(x, (str, Path)):
+            return [x]
+        return list(x)
+
+    video_list = _as_list(videos)
+
+    # Resolve axes — GUI fires once for the whole batch, same as make_croparrays
+    axes_use = axes
+    if axes_use is None and define_axes:
+        from . import gui as _gui
+        axes_result = _gui.define_video_axes(path=video_list[axes_source_index])
+        axes_use = "".join(axes_result.axes)
+
+    written = []
+    it = video_list
+    if progress and tqdm is not None:
+        it = tqdm(it, desc="make_csvs", unit="file")
+
+    for vid_path in it:
+        vid_path = Path(vid_path)
+        csv_dir = Path(out_dir) if out_dir is not None else vid_path.parent
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        out_csv = csv_dir / f"{vid_path.stem}{out_suffix}.csv"
+
+        if skip_existing and out_csv.exists():
+            print(f"[skip] {out_csv.name}")
+            continue
+
+        vid = _load_detect_channel(vid_path, axes_use, detect_ch)
+
+        if isinstance(minmass, dict):
+            val = minmass.get(vid_path.name, minmass.get(vid_path.stem, "auto"))
+            thresh = auto_minmass(vid, diameter, percentile=percentile, separation=separation) \
+                if val == "auto" else float(val)
+        elif minmass == "auto":
+            thresh = auto_minmass(vid, diameter, percentile=percentile, separation=separation)
+        else:
+            thresh = float(minmass)
+
+        spots = tp.batch(vid, diameter=diameter, minmass=thresh,
+                         separation=separation, percentile=percentile)
+
+        if track:
+            spots = tp.link(spots, search_range=search_range, memory=memory)
+            if min_track_len > 1:
+                spots = tp.filter_stubs(spots, threshold=min_track_len)
+
+        spots.to_csv(out_csv, index=False)
+        n_tracks = spots["particle"].nunique() if "particle" in spots.columns else "N/A"
+        print(f"[done] {out_csv.name}  ({len(spots)} detections, {n_tracks} tracks, minmass={thresh:.0f})")
+        written.append(out_csv)
+
+    return written
+
 
 def standardize_video_axes(
     video: np.ndarray,
