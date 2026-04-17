@@ -234,13 +234,16 @@ def plot_trackarray_crops(
             bz = bz.rolling(t=rolling, center=True, min_periods=1).mean()
 
         if "ch" in bz.dims:
-            # canonical order for channelled image stacks
-            bz = bz.transpose("t", "y", "x", "ch")
-
+            # canonical order; prepend any unknown dims (e.g. rna, znf)
+            _known = {"t", "y", "x", "ch"}
+            _extra = [d for d in bz.dims if d not in _known]
+            bz = bz.transpose(*_extra, "t", "y", "x", "ch")
 
         # ---- No channel dimension ----
         if "ch" not in bz.dims:
-            bz = bz.transpose("t", "y", "x")  
+            _known = {"t", "y", "x"}
+            _extra = [d for d in bz.dims if d not in _known]
+            bz = bz.transpose(*_extra, "t", "y", "x")  
             normed = _normalize_for_display(bz, quantile_range=quantile_range)
 
             g = normed.plot.imshow(
@@ -267,7 +270,8 @@ def plot_trackarray_crops(
 
         # ---- Single-channel override ----
         if ch is not None:
-            bz1 = bz.isel(ch=int(ch)).transpose("t", "y", "x") 
+            _extra1 = [d for d in bz.isel(ch=int(ch)).dims if d not in {"t", "y", "x"}]
+            bz1 = bz.isel(ch=int(ch)).transpose(*_extra1, "t", "y", "x")
             normed = _normalize_for_display(bz1, quantile_range=quantile_range)
 
             g = normed.plot.imshow(
@@ -294,8 +298,14 @@ def plot_trackarray_crops(
 
         # ---- Normalize each channel separately ----
         n_ch = int(bz.sizes["ch"])
+        _known_tyx = {"t", "y", "x"}
         ch_normed = [
-            _normalize_for_display(bz.isel(ch=i).transpose("t", "y", "x"), quantile_range=quantile_range)
+            _normalize_for_display(
+                bz.isel(ch=i).transpose(
+                    *[d for d in bz.isel(ch=i).dims if d not in _known_tyx], "t", "y", "x"
+                ),
+                quantile_range=quantile_range,
+            )
             for i in range(n_ch)
         ]
         normed_all = xr.concat(ch_normed, dim="ch").assign_coords(ch=bz["ch"].values)
