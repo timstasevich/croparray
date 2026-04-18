@@ -12,7 +12,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
-__all__ = ["standardize_video_axes","standardize_spots", "create_crop_array", "make_croparrays", "open_measure_concat", "auto_minmass", "preview_detection", "review_thresholds", "make_csvs"]
+__all__ = ["standardize_video_axes","standardize_spots", "create_crop_array", "make_croparrays", "open_measure_concat", "auto_minmass", "preview_detection", "review_thresholds", "review_rois", "make_csvs"]
 
 _CANONICAL = ("fov", "f", "z", "y", "x", "ch")
 
@@ -715,7 +715,8 @@ def review_thresholds(
         result[vid_path.name] = float(auto_thresh)
         precomp.append(dict(path=vid_path, frame=frame, all_spots=all_spots,
                             auto_thresh=float(auto_thresh), masses=masses,
-                            thresholds=thresholds, counts=counts))
+                            thresholds=thresholds, counts=counts,
+                            roi_polygon=_load_roi_polygon(vid_path)))
 
     print("Done. Adjust sliders; plots update on release.")
 
@@ -747,8 +748,11 @@ def review_thresholds(
     def draw(vd, thresh):
         import io
         import matplotlib.pyplot as plt
+        from matplotlib.patches import Polygon as MplPolygon
         filtered = vd["all_spots"][vd["all_spots"]["mass"] >= thresh] \
             if len(vd["all_spots"]) > 0 else vd["all_spots"]
+        if vd["roi_polygon"] is not None:
+            filtered = _filter_spots_by_roi(filtered, vd["roi_polygon"])
         vmin = float(np.percentile(vd["frame"], contrast_lo.value))
         vmax = float(np.percentile(vd["frame"], contrast_hi.value))
         with plt.ioff():
@@ -759,7 +763,14 @@ def review_thresholds(
             tp.annotate(filtered, vd["frame"], ax=ax_frame,
                         imshow_style={"vmin": vmin, "vmax": vmax, "cmap": "gray"},
                         plot_style={"markersize": 6, "markeredgewidth": 1})
-            ax_frame.set_title(f"{len(filtered)} spots  |  minmass={thresh:.0f}", fontsize=9)
+            if vd["roi_polygon"] is not None:
+                # polygon stored as (y,x); matplotlib patches want (x,y)
+                xy = vd["roi_polygon"][:, [1, 0]]
+                ax_frame.add_patch(MplPolygon(xy, closed=True,
+                                              edgecolor="yellow", facecolor="none",
+                                              linewidth=1.5, linestyle="--"))
+            roi_tag = "  [ROI]" if vd["roi_polygon"] is not None else ""
+            ax_frame.set_title(f"{len(filtered)} spots  |  minmass={thresh:.0f}{roi_tag}", fontsize=9)
             ax_frame.set_xticks([]); ax_frame.set_yticks([])
             ax_elbow.plot(vd["thresholds"], vd["counts"], "k-", lw=1.5)
             ax_elbow.axvline(thresh, color="r", linestyle="--", lw=1.5,
@@ -803,6 +814,149 @@ def review_thresholds(
 
     draw(vd0, vd0["auto_thresh"])
     display(widgets.VBox([dropdown, img_widget, slider, contrast_lo, contrast_hi]))
+
+    return result
+
+
+def _roi_sidecar_path(vid_path: Path) -> Path:
+    return vid_path.parent / (vid_path.stem + "__roi.json")
+
+
+def _load_roi_polygon(vid_path: Path) -> "np.ndarray | None":
+    """Return (N, 2) yx polygon array from sidecar, or None if absent."""
+    import json
+    p = _roi_sidecar_path(Path(vid_path))
+    if not p.exists():
+        return None
+    with open(p) as f:
+        data = json.load(f)
+    return np.array(data["polygon"])  # (N, 2) — row=y, col=x
+
+
+def _filter_spots_by_roi(spots: "pd.DataFrame", polygon_yx: "np.ndarray | None") -> "pd.DataFrame":
+    """Keep only spots whose (x, y) falls inside polygon_yx (N,2) in row,col order."""
+    if polygon_yx is None or len(spots) == 0:
+        return spots
+    from matplotlib.path import Path as MplPath
+    # napari stores (row, col) = (y, x); matplotlib Path wants (x, y) = (col, row)
+    path = MplPath(polygon_yx[:, [1, 0]])
+    mask = path.contains_points(spots[["x", "y"]].values)
+    return spots[mask]
+
+
+def review_rois(
+    videos,
+    *,
+    detect_ch: int = 0,
+    axes: Optional[str] = None,
+    define_axes: bool = True,
+    axes_source_index: int = 0,
+) -> dict:
+    """
+    Open a napari viewer showing the max(t,z) projection for every video.
+
+    Each "frame" in the viewer corresponds to one video — scroll through them
+    to verify coverage, then draw one polygon ROI per frame.  Polygons are
+    saved as ``<video_stem>__roi.json`` next to each video and are automatically
+    applied by :func:`make_csvs`.
+
+    Returns
+    -------
+    dict
+        ``{video_filename: [[y0,x0], [y1,x1], ...]}`` for each video that
+        received a polygon (``None`` for videos left without one).
+    """
+    try:
+        import napari
+        import json
+        from tifffile import imread as _tiff_read
+    except ImportError as e:
+        raise ImportError("napari and tifffile are required for review_rois.") from e
+
+    def _as_list(x):
+        if isinstance(x, (str, Path)):
+            return [x]
+        return list(x)
+
+    video_list = [Path(v) for v in _as_list(videos)]
+
+    axes_use = axes
+    if axes_use is None and define_axes:
+        from . import gui as _gui
+        axes_use = "".join(_gui.define_video_axes(path=video_list[axes_source_index]).axes)
+
+    # Max t+z projection for each video
+    print("Computing max projections for ROI review...")
+    projs = []
+    for vid_path in video_list:
+        proj = _load_detect_channel(vid_path, axes_use, detect_ch).max(axis=0)  # (y, x)
+        projs.append(proj)
+        print(f"  {vid_path.name}: {proj.shape}")
+
+    stack = np.stack(projs, axis=0)  # (n_videos, y, x)
+    names = [v.name for v in video_list]
+
+    # Load any previously saved ROIs as initial shapes
+    existing_shapes: list = []
+    for i, vid_path in enumerate(video_list):
+        poly = _load_roi_polygon(vid_path)
+        if poly is not None:
+            frame_col = np.full((len(poly), 1), float(i))
+            existing_shapes.append(np.concatenate([frame_col, poly], axis=1))
+
+    import json
+    from qtpy.QtWidgets import QPushButton, QLabel, QVBoxLayout, QWidget
+
+    viewer = napari.Viewer(title="review_rois — draw one polygon per video frame")
+    viewer.add_image(stack, name="max_projection (all videos)", colormap="gray")
+    shapes_layer = viewer.add_shapes(
+        existing_shapes if existing_shapes else None,
+        shape_type="polygon",
+        edge_color="yellow",
+        face_color=[1, 1, 0, 0.08],
+        name="ROI",
+        ndim=3,
+    )
+
+    result: dict = {v.name: None for v in video_list}
+
+    def _save_rois():
+        for i, vid_path in enumerate(video_list):
+            polys = [
+                np.array(s) for s in shapes_layer.data
+                if len(np.array(s)) > 0 and np.allclose(np.array(s)[:, 0], i, atol=0.5)
+            ]
+            if polys:
+                verts_yx = polys[-1][:, 1:].tolist()
+                roi_path = _roi_sidecar_path(vid_path)
+                with open(roi_path, "w") as f:
+                    json.dump({"polygon": verts_yx}, f)
+                result[vid_path.name] = verts_yx
+                status_label.setText(f"Saved {sum(v is not None for v in result.values())}/{len(video_list)} ROIs")
+                print(f"[saved] {vid_path.name}  →  {roi_path.name}")
+            else:
+                print(f"[none]  No ROI for {vid_path.name}")
+
+    # Build a small dock widget with a Save button
+    container = QWidget()
+    layout = QVBoxLayout()
+    container.setLayout(layout)
+
+    status_label = QLabel(f"0/{len(video_list)} ROIs saved")
+    save_btn = QPushButton("💾  Save ROIs")
+    save_btn.setToolTip("Save polygons for all frames to __roi.json sidecars")
+    save_btn.clicked.connect(_save_rois)
+
+    layout.addWidget(status_label)
+    layout.addWidget(save_btn)
+    viewer.window.add_dock_widget(container, name="Save ROIs", area="right")
+
+    print("\nInstructions:")
+    print("  Scroll the bottom slider — each frame = one video:")
+    for i, name in enumerate(names):
+        print(f"    frame {i:3d}:  {name}")
+    print("  Select the Polygon tool (P) and draw one ROI per frame.")
+    print("  Click 'Save ROIs' in the right panel when done.")
 
     return result
 
@@ -919,6 +1073,12 @@ def make_csvs(
 
         spots = tp.batch(vid, diameter=diameter, minmass=thresh,
                          separation=separation, percentile=percentile)
+
+        roi_poly = _load_roi_polygon(vid_path)
+        if roi_poly is not None:
+            before = len(spots)
+            spots = _filter_spots_by_roi(spots, roi_poly)
+            print(f"[roi]   {vid_path.name}: {before} → {len(spots)} spots after ROI filter")
 
         if track:
             spots = tp.link(spots, search_range=search_range, memory=memory)

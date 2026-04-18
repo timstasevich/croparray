@@ -73,26 +73,35 @@ def _merge_manual_filter_sidecars_track(ds: xr.Dataset, path_nc: str) -> xr.Data
     if not sidecars:
         return ds
 
+    print(f"[TrackArray] Found {len(sidecars)} sidecar(s).")
+
     to_merge: list[xr.Dataset] = [ds]
     for sc in sidecars:
+        print(f"[TrackArray] Checking sidecar: {sc}")
         try:
             with xr.open_dataset(sc) as _tmp:
                 ds_sc = _tmp.load()
-        except Exception:
+        except Exception as e:
+            print(f"[TrackArray] Failed to load {sc}: {e}")
             continue
 
         # Only take track-space sidecars here
         if "track_id" not in ds_sc.dims:
+            print(f"[TrackArray] Skipping {sc} (no 'track_id' dim).")
             continue
 
         if len(ds_sc.data_vars) == 0:
+            print(f"[TrackArray] Skipping {sc} (no data variables).")
             continue
 
+        print(f"[TrackArray] Merging sidecar {sc} with vars: {list(ds_sc.data_vars)}")
         to_merge.append(ds_sc)
 
     if len(to_merge) == 1:
+        print("[TrackArray] No valid sidecars merged.")
         return ds
 
+    print("[TrackArray] Merging sidecars into TrackArray dataset.")
     return xr.merge(to_merge, compat="override", join="outer")
 
 @overload
