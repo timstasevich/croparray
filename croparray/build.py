@@ -2001,7 +2001,11 @@ def open_measure_concat(
             raise ValueError(f"labels must have same length as dims ({len(labels)} vs {len(dims)})")
 
     def _is_leaf(node: Any) -> bool:
-        return isinstance(node, (list, tuple)) and len(node) > 0 and all(isinstance(v, (str, Path)) for v in node)
+        if not isinstance(node, (list, tuple)):
+            return False
+        if len(node) == 0:
+            return True  # empty file list — handled as a skipped leaf
+        return all(isinstance(v, (str, Path)) for v in node)
 
     def _default_leaf_labels(files: Sequence[Union[str, Path]]) -> list[str]:
         return [Path(f).stem for f in files]
@@ -2045,7 +2049,9 @@ def open_measure_concat(
 
         # ---- leaf: node is list of files ----
         if _is_leaf(node):
-            
+            if len(node) == 0:
+                return None  # empty group — skip
+
             files = [str(f) for f in node]
 
             tas = []
@@ -2139,14 +2145,20 @@ def open_measure_concat(
         if not isinstance(node, (list, tuple)):
             raise TypeError(f"Expected list/tuple at dim={dim} (level {level}), got {type(node)}")
 
-        children = [_recurse(child, level + 1) for child in node]
+        all_children = [_recurse(child, level + 1) for child in node]
 
-        this_labels = lvl_labels
-        if this_labels is None:
-            this_labels = [f"{dim}{i}" for i in range(len(children))]
-        else:
-            if len(this_labels) != len(children):
-                raise ValueError(f"labels for dim={dim} must match group length ({len(this_labels)} vs {len(children)})")
+        # Filter out empty groups (returned as None)
+        this_labels = lvl_labels if lvl_labels is not None else [f"{dim}{i}" for i in range(len(node))]
+        if len(this_labels) != len(all_children):
+            raise ValueError(f"labels for dim={dim} must match group length ({len(this_labels)} vs {len(all_children)})")
+        children, this_labels = zip(
+            *[(c, l) for c, l in zip(all_children, this_labels) if c is not None]
+        ) if any(c is not None for c in all_children) else ([], [])
+        children = list(children)
+        this_labels = list(this_labels)
+
+        if not children:
+            return None
 
         out = ca.concat(cas=children, dim=dim, labels=this_labels, join=join)
 
