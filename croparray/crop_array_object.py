@@ -104,20 +104,37 @@ class CropArray:
     def napari(self):
         return self._napari
     
+    @staticmethod
+    def _scalar_from_var(da, name: str, cast):
+        """
+        Extract a scalar from a data variable that may have been broadcast into
+        an array after concatenation. If all values are equal, return the scalar.
+        If they differ, raise a clear error.
+        """
+        import numpy as np
+        vals = np.asarray(da).ravel()
+        unique = np.unique(vals[~np.isnan(vals.astype(float))] if np.issubdtype(vals.dtype, np.floating) else vals)
+        if unique.size == 1:
+            return cast(unique[0])
+        raise ValueError(
+            f"'{name}' differs across concatenated datasets: {unique}. "
+            f"Datasets with different '{name}' values cannot be combined."
+        )
+
     @property
     def xy_pad(self) -> int:
         if "xy_pad" in self.ds.attrs:
             return int(self.ds.attrs["xy_pad"])
         if "xy_pad" in self.ds:  # old files
-            return int(self.ds["xy_pad"].item())
+            return self._scalar_from_var(self.ds["xy_pad"], "xy_pad", int)
         raise AttributeError("xy_pad not found")
-    
+
     @property
     def dx(self) -> float:
         if "dx" in self.ds.attrs:
             return float(self.ds.attrs["dx"])
         if "dx" in self.ds:  # old files
-            return float(self.ds["dx"].item())
+            return self._scalar_from_var(self.ds["dx"], "dx", float)
         raise AttributeError("dx not found")
 
     @property
@@ -125,7 +142,7 @@ class CropArray:
         if "dy" in self.ds.attrs:
             return float(self.ds.attrs["dy"])
         if "dy" in self.ds:  # old files
-            return float(self.ds["dy"].item())
+            return self._scalar_from_var(self.ds["dy"], "dy", float)
         raise AttributeError("dy not found")
 
     @property
@@ -133,7 +150,7 @@ class CropArray:
         if "dz" in self.ds.attrs:
             return float(self.ds.attrs["dz"])
         if "dz" in self.ds:  # old files
-            return float(self.ds["dz"].item())
+            return self._scalar_from_var(self.ds["dz"], "dz", float)
         raise AttributeError("dz not found")
 
     @property
@@ -141,15 +158,15 @@ class CropArray:
         if "dt" in self.ds.attrs:
             return float(self.ds.attrs["dt"])
         if "dt" in self.ds:  # old files
-            return float(self.ds["dt"].item())
+            return self._scalar_from_var(self.ds["dt"], "dt", float)
         raise AttributeError("dt not found")
-        
+
     @property
     def units(self):
         if "units" in self.ds.attrs:
             return self.ds.attrs["units"]
         if "units" in self.ds:  # old files
-            return self.ds["units"].item()
+            return self._scalar_from_var(self.ds["units"], "units", str)
         raise AttributeError("units not found")
         
     @property
