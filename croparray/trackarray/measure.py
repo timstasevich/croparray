@@ -5,7 +5,7 @@ import xarray as xr
 
 __all__ = [
     # ... existing ...
-    "tracklist","track_length","step_size", "msd"
+    "tracklist","track_length","step_size", "msd", "autocorr",
 ]
 
 def tracklist(
@@ -244,6 +244,154 @@ def msd(
         out.attrs["units"] = f"{base_units}^2"
 
     return out
+
+def _fft_autocorr_1d(series: np.ndarray, mask_zeros: bool = True) -> np.ndarray:
+    """FFT-based autocorrelation normalized by lag count and mean^2 (G(τ) convention)."""
+    n = len(series)
+    mask = ~np.isnan(series)
+    if mask_zeros:
+        mask &= series != 0
+    series_clean = series[mask]
+    if len(series_clean) < 2:
+        return np.full(n, np.nan)
+
+    mean_val = np.mean(series_clean)
+    series_zm = np.nan_to_num(series - mean_val, nan=0.0)
+
+    padded = np.zeros(2 * n)
+    padded[:n] = series_zm
+    fft_s = np.fft.fft(padded)
+    autocorr = np.fft.ifft(fft_s * np.conj(fft_s)).real[:n]
+
+    norm = np.array([np.sum(mask[: n - tau]) for tau in range(n)], dtype=float)
+    norm[norm == 0] = np.nan
+    autocorr = autocorr / norm
+
+    if mean_val != 0:
+        autocorr /= mean_val ** 2
+
+    return autocorr
+
+
+def _bleach_correct_series(series: np.ndarray) -> np.ndarray:
+    """Divide signal by a fitted single-exponential decay A*exp(-k*t) + C."""
+    from scipy.optimize import curve_fit
+
+    n = len(series)
+    t = np.arange(n, dtype=float)
+    mask = ~np.isnan(series) & (series != 0)
+    if mask.sum() < 5:
+        return series.copy()
+
+    t_v, s_v = t[mask], series[mask]
+    try:
+        popt, _ = curve_fit(
+            lambda x, A, k, C: A * np.exp(-k * x) + C,
+            t_v,
+            s_v,
+            p0=[s_v[0], 1.0 / n, s_v[-1]],
+            maxfev=3000,
+        )
+        A, k, C = popt
+        fit = A * np.exp(-k * t) + C
+        fit = np.where(np.abs(fit) < 1e-10, np.nan, fit)
+        corrected = series / fit
+        corrected[~mask] = np.nan
+        return corrected
+    except Exception:
+        return series.copy()
+
+
+def autocorr(
+    ta,
+    *,
+    var: str = "signal",
+    out_name: str | None = None,
+    max_lag: int | None = None,
+    bleach_correct: bool = False,
+):
+    """
+    Compute per-track FFT autocorrelation G(Δt) and store it in the dataset.
+
+    Works like `msd`: the `t` dimension of the output represents lag time (Δt),
+    not absolute time. Returns the TrackArray so calls can be chained.
+
+    Works for both channelled variables (dims include 'ch') and channel-less
+    variables (e.g. 'ch0_mask__major_axis_length_px').
+
+    Parameters
+    ----------
+    ta : TrackArray or xarray.Dataset
+    var : str
+        Source variable (e.g. 'signal', 'ch0_mask__major_axis_length_px').
+    out_name : str or None
+        Name for the new dataset variable. Defaults to ``f"{var}_autocorr"``.
+    max_lag : int or None
+        Maximum lag in frames. Defaults to half the time-axis length.
+    bleach_correct : bool
+        Fit and divide out a per-track exponential decay before correlating.
+        Corrects for photobleaching or slow signal loss over time.
+
+    Returns
+    -------
+    ta
+        Same TrackArray (or Dataset) with ``out_name`` added in place.
+    """
+    ds = ta.ds if hasattr(ta, "ds") else ta
+
+    if var not in ds:
+        raise KeyError(f"Variable {var!r} not found. Available: {list(ds.data_vars)}")
+
+    if out_name is None:
+        out_name = f"{var}_autocorr"
+
+    da = ds[var]
+    has_ch = "ch" in da.dims
+
+    n_t = ds.sizes["t"]
+    if max_lag is None:
+        max_lag = n_t // 2
+    max_lag = min(max_lag, n_t - 1)
+
+    t_coord = ds["t"].values[: max_lag + 1]
+
+    group_dims = [d for d in da.dims if d not in ("t", "ch")]
+
+    def _compute_for_slice(da_slice):
+        da_stacked = da_slice.stack(obs=group_dims)
+        n_obs = da_stacked.sizes["obs"]
+        result = np.full((n_obs, max_lag + 1), np.nan)
+        for i in range(n_obs):
+            series = da_stacked.isel(obs=i).values.astype(float)
+            if bleach_correct:
+                series = _bleach_correct_series(series)
+            g = _fft_autocorr_1d(series)[: max_lag + 1]
+            result[i, : len(g)] = g
+        out = xr.DataArray(
+            result,
+            dims=["obs", "t"],
+            coords={"obs": da_stacked.coords["obs"], "t": t_coord},
+        )
+        return out.unstack("obs")
+
+    if has_ch:
+        ch_coord = da.coords["ch"] if "ch" in da.coords else np.arange(da.sizes["ch"])
+        slices = [_compute_for_slice(da.isel(ch=ch_i, drop=True))
+                  for ch_i in range(da.sizes["ch"])]
+        out_da = xr.concat(slices, dim=xr.DataArray(ch_coord, dims="ch", name="ch"))
+    else:
+        out_da = _compute_for_slice(da)
+
+    out_da.attrs.update({
+        "long_name": f"autocorrelation of {var}",
+        "source_var": var,
+        "bleach_corrected": bleach_correct,
+        "t_description": "lag time Δt (same units as dataset t coordinate); NOT absolute time",
+    })
+
+    ds[out_name] = out_da
+    return ta
+
 
 def step_size(
     self,

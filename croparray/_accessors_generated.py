@@ -842,6 +842,7 @@ from croparray.build import open_measure_concat as _impl_CropArrayBuild_open_mea
 from croparray.build import auto_minmass as _impl_CropArrayBuild_auto_minmass
 from croparray.build import preview_detection as _impl_CropArrayBuild_preview_detection
 from croparray.build import review_thresholds as _impl_CropArrayBuild_review_thresholds
+from croparray.build import review_rois as _impl_CropArrayBuild_review_rois
 from croparray.build import make_csvs as _impl_CropArrayBuild_make_csvs
 
 @dataclass
@@ -1185,6 +1186,21 @@ Updating the slider re-filters pre-detected spots instantly.
 Returns a dict {filename: threshold} for use with make_csvs(minmass=...)."""
         return _impl_CropArrayBuild_review_thresholds(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, diameter=diameter, percentile=percentile, separation=separation, frame_index=frame_index, max_spots=max_spots, n_thresholds=n_thresholds)
 
+    def review_rois(self, videos, detect_ch=0, axes=None, define_axes=True, axes_source_index=0):
+        """Open a napari viewer showing the max(t,z) projection for every video.
+
+Each "frame" in the viewer corresponds to one video — scroll through them
+to verify coverage, then draw one polygon ROI per frame.  Polygons are
+saved as ``<video_stem>__roi.json`` next to each video and are automatically
+applied by :func:`make_csvs`.
+
+Returns
+-------
+dict
+    ``{video_filename: [[y0,x0], [y1,x1], ...]}`` for each video that
+    received a polygon (``None`` for videos left without one)."""
+        return _impl_CropArrayBuild_review_rois(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index)
+
     def make_csvs(self, videos, detect_ch=0, axes=None, define_axes=True, axes_source_index=0, diameter=7, minmass='auto', separation=None, percentile=64, track=True, search_range=5, memory=2, min_track_len=3, out_dir=None, out_suffix='_allspots', skip_existing=True, progress=True):
         """Detect spots with TrackPy and save one CSV per video, ready for make_croparrays.
 
@@ -1251,6 +1267,9 @@ CropArrayBuild.preview_detection.__signature__ = inspect.Signature(parameters=[i
 CropArrayBuild.review_thresholds.__doc__ = _impl_CropArrayBuild_review_thresholds.__doc__
 CropArrayBuild.review_thresholds.__wrapped__ = _impl_CropArrayBuild_review_thresholds
 CropArrayBuild.review_thresholds.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_review_thresholds).parameters.values()))
+CropArrayBuild.review_rois.__doc__ = _impl_CropArrayBuild_review_rois.__doc__
+CropArrayBuild.review_rois.__wrapped__ = _impl_CropArrayBuild_review_rois
+CropArrayBuild.review_rois.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_review_rois).parameters.values()))
 CropArrayBuild.make_csvs.__doc__ = _impl_CropArrayBuild_make_csvs.__doc__
 CropArrayBuild.make_csvs.__wrapped__ = _impl_CropArrayBuild_make_csvs
 CropArrayBuild.make_csvs.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_CropArrayBuild_make_csvs).parameters.values()))
@@ -1701,6 +1720,7 @@ from croparray.trackarray.measure import tracklist as _impl_TrackArrayMeasure_tr
 from croparray.trackarray.measure import track_length as _impl_TrackArrayMeasure_track_length
 from croparray.trackarray.measure import step_size as _impl_TrackArrayMeasure_step_size
 from croparray.trackarray.measure import msd as _impl_TrackArrayMeasure_msd
+from croparray.trackarray.measure import autocorr as _impl_TrackArrayMeasure_autocorr
 
 @dataclass
 class TrackArrayMeasure(_BaseAccessor):
@@ -1991,6 +2011,34 @@ is not taken over 'exp' or 'fov'. The estimated drift trace is simply
 subtracted from each coordinate; any constant offset is irrelevant for MSD."""
         return _impl_TrackArrayMeasure_msd(self.ds, xvar, yvar, zvar, name, space, drift_correct, drift_dims)
 
+    def autocorr(self, var='signal', out_name=None, max_lag=None, bleach_correct=False):
+        """Compute per-track FFT autocorrelation G(Δt) and store it in the dataset.
+
+Works like `msd`: the `t` dimension of the output represents lag time (Δt),
+not absolute time. Returns the TrackArray so calls can be chained.
+
+Works for both channelled variables (dims include 'ch') and channel-less
+variables (e.g. 'ch0_mask__major_axis_length_px').
+
+Parameters
+----------
+ta : TrackArray or xarray.Dataset
+var : str
+    Source variable (e.g. 'signal', 'ch0_mask__major_axis_length_px').
+out_name : str or None
+    Name for the new dataset variable. Defaults to ``f"{var}_autocorr"``.
+max_lag : int or None
+    Maximum lag in frames. Defaults to half the time-axis length.
+bleach_correct : bool
+    Fit and divide out a per-track exponential decay before correlating.
+    Corrects for photobleaching or slow signal loss over time.
+
+Returns
+-------
+ta
+    Same TrackArray (or Dataset) with ``out_name`` added in place."""
+        return _impl_TrackArrayMeasure_autocorr(self.ds, var=var, out_name=out_name, max_lag=max_lag, bleach_correct=bleach_correct)
+
 
 TrackArrayMeasure.best_z_proj.__doc__ = _impl_TrackArrayMeasure_best_z_proj.__doc__
 TrackArrayMeasure.best_z_proj.__wrapped__ = _impl_TrackArrayMeasure_best_z_proj
@@ -2022,6 +2070,9 @@ TrackArrayMeasure.step_size.__signature__ = inspect.Signature(parameters=[inspec
 TrackArrayMeasure.msd.__doc__ = _impl_TrackArrayMeasure_msd.__doc__
 TrackArrayMeasure.msd.__wrapped__ = _impl_TrackArrayMeasure_msd
 TrackArrayMeasure.msd.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_msd).parameters.values())[1:])
+TrackArrayMeasure.autocorr.__doc__ = _impl_TrackArrayMeasure_autocorr.__doc__
+TrackArrayMeasure.autocorr.__wrapped__ = _impl_TrackArrayMeasure_autocorr
+TrackArrayMeasure.autocorr.__signature__ = inspect.Signature(parameters=[inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)] + list(inspect.signature(_impl_TrackArrayMeasure_autocorr).parameters.values())[1:])
 
 
 from croparray.napari_view import montage_viewer as _impl_TrackArrayView_montage_viewer
