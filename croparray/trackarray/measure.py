@@ -245,8 +245,15 @@ def msd(
 
     return out
 
-def _fft_autocorr_1d(series: np.ndarray, mask_zeros: bool = True) -> np.ndarray:
-    """FFT-based autocorrelation normalized by lag count and mean^2 (G(τ) convention)."""
+def _fft_autocorr_1d(series: np.ndarray, mask_zeros: bool = True, correct_missing: bool = True) -> np.ndarray:
+    """FFT-based autocorrelation normalized by lag count and mean^2 (G(τ) convention).
+
+    correct_missing : bool, default True
+        If True, norm counts only pairs where both t and t+τ are valid — correct
+        when tracks have missing timepoints.
+        If False, norm counts valid t positions only (legacy behavior, equivalent
+        to correct_missing=True for complete tracks with no NaN).
+    """
     n = len(series)
     mask = ~np.isnan(series)
     if mask_zeros:
@@ -263,7 +270,10 @@ def _fft_autocorr_1d(series: np.ndarray, mask_zeros: bool = True) -> np.ndarray:
     fft_s = np.fft.fft(padded)
     autocorr = np.fft.ifft(fft_s * np.conj(fft_s)).real[:n]
 
-    norm = np.array([np.sum(mask[: n - tau]) for tau in range(n)], dtype=float)
+    if correct_missing:
+        norm = np.array([np.sum(mask[: n - tau] & mask[tau:]) for tau in range(n)], dtype=float)
+    else:
+        norm = np.array([np.sum(mask[: n - tau]) for tau in range(n)], dtype=float)
     norm[norm == 0] = np.nan
     autocorr = autocorr / norm
 
@@ -309,6 +319,7 @@ def autocorr(
     out_name: str | None = None,
     max_lag: int | None = None,
     bleach_correct: bool = False,
+    correct_missing: bool = True,
 ):
     """
     Compute per-track FFT autocorrelation G(Δt) and store it in the dataset.
@@ -365,7 +376,7 @@ def autocorr(
             series = da_stacked.isel(obs=i).values.astype(float)
             if bleach_correct:
                 series = _bleach_correct_series(series)
-            g = _fft_autocorr_1d(series)[: max_lag + 1]
+            g = _fft_autocorr_1d(series, correct_missing=correct_missing)[: max_lag + 1]
             result[i, : len(g)] = g
         out = xr.DataArray(
             result,
