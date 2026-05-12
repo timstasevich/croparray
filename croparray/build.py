@@ -977,12 +977,16 @@ def make_csvs(
     memory: int = 2,
     min_track_len: int = 3,
     out_dir: Optional[Union[str, Path]] = None,
-    out_suffix: str = "_allspots",
+    spots_suffix: str = "_spots",
+    tracks_suffix: str = "_tracks",
     skip_existing: bool = True,
     progress: bool = True,
 ) -> list:
     """
-    Detect spots with TrackPy and save one CSV per video, ready for make_croparrays.
+    Detect spots with TrackPy and save CSVs per video, ready for make_croparrays.
+
+    Always saves all detected spots as {stem}{spots_suffix}.csv.
+    If track=True, also saves linked+filtered tracks as {stem}{tracks_suffix}.csv.
 
     Parameters
     ----------
@@ -1011,15 +1015,17 @@ def make_csvs(
         Discard tracks shorter than this (frames).
     out_dir
         Directory for CSV output. Defaults to each video's parent directory.
-    out_suffix
-        String appended to the video stem before '.csv'.
+    spots_suffix
+        Suffix for the all-detections CSV (default '_spots').
+    tracks_suffix
+        Suffix for the linked-tracks CSV when track=True (default '_tracks').
     skip_existing
-        If True, skip videos whose output CSV already exists.
+        If True, skip videos where all expected output CSVs already exist.
 
     Returns
     -------
     list of Path
-        Paths of written CSV files.
+        Paths of all written CSV files.
     """
     try:
         import trackpy as tp
@@ -1054,10 +1060,12 @@ def make_csvs(
         vid_path = Path(vid_path)
         csv_dir = Path(out_dir) if out_dir is not None else vid_path.parent
         csv_dir.mkdir(parents=True, exist_ok=True)
-        out_csv = csv_dir / f"{vid_path.stem}{out_suffix}.csv"
+        spots_csv = csv_dir / f"{vid_path.stem}{spots_suffix}.csv"
+        tracks_csv = csv_dir / f"{vid_path.stem}{tracks_suffix}.csv" if track else None
 
-        if skip_existing and out_csv.exists():
-            print(f"[skip] {out_csv.name}")
+        expected = [spots_csv] + ([tracks_csv] if tracks_csv else [])
+        if skip_existing and all(p.exists() for p in expected):
+            print(f"[skip] {vid_path.stem}")
             continue
 
         vid = _load_detect_channel(vid_path, axes_use, detect_ch)
@@ -1080,15 +1088,18 @@ def make_csvs(
             spots = _filter_spots_by_roi(spots, roi_poly)
             print(f"[roi]   {vid_path.name}: {before} → {len(spots)} spots after ROI filter")
 
-        if track:
-            spots = tp.link(spots, search_range=search_range, memory=memory)
-            if min_track_len > 1:
-                spots = tp.filter_stubs(spots, threshold=min_track_len)
+        spots.to_csv(spots_csv, index=False)
+        print(f"[spots] {spots_csv.name}  ({len(spots)} detections, minmass={thresh:.0f})")
+        written.append(spots_csv)
 
-        spots.to_csv(out_csv, index=False)
-        n_tracks = spots["particle"].nunique() if "particle" in spots.columns else "N/A"
-        print(f"[done] {out_csv.name}  ({len(spots)} detections, {n_tracks} tracks, minmass={thresh:.0f})")
-        written.append(out_csv)
+        if track:
+            tracked = tp.link(spots, search_range=search_range, memory=memory)
+            if min_track_len > 1:
+                tracked = tp.filter_stubs(tracked, threshold=min_track_len)
+            tracked.to_csv(tracks_csv, index=False)
+            n_tracks = tracked["particle"].nunique() if "particle" in tracked.columns else "N/A"
+            print(f"[tracks] {tracks_csv.name}  ({len(tracked)} detections, {n_tracks} tracks)")
+            written.append(tracks_csv)
 
     return written
 
