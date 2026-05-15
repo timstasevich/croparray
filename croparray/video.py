@@ -147,6 +147,34 @@ def _ensure_list_of_movies(tiff_movies):
         return [tiff_movies]
     return list(tiff_movies)
 
+def _load_as_TZCYX_from_axes(tiff_movie, axes: str):
+    """Load TIFF or array and reorder to canonical (T, Z, C, Y, X) using an explicit axes string."""
+    if isinstance(tiff_movie, (str, Path)):
+        data = tiff.imread(str(tiff_movie))
+    else:
+        data = np.asarray(tiff_movie)
+
+    axes_upper = axes.upper().replace(" ", "")
+    if len(axes_upper) != data.ndim:
+        raise ValueError(
+            f"axes string '{axes}' has {len(axes_upper)} dims but data has {data.ndim} dims (shape={data.shape})"
+        )
+
+    canonical = list("TZCYX")
+    # Reorder present axes into canonical order
+    present = [a for a in canonical if a in axes_upper]
+    order = [axes_upper.index(a) for a in present]
+    data = np.transpose(data, order)
+
+    # Insert singleton dims for any missing canonical axes
+    result = data
+    for i, a in enumerate(canonical):
+        if a not in axes_upper:
+            result = np.expand_dims(result, axis=i)
+
+    return result  # always (T, Z, C, Y, X)
+
+
 def _load_as_TZCYX(
     tiff_movie,
     stack_n=None,
@@ -167,8 +195,11 @@ def _load_as_TZCYX(
     else:
         data = np.asarray(tiff_movie)
 
+    # Promote 2D (Y,X) to 3D (1,Y,X) so axis inference can proceed
+    if data.ndim == 2:
+        data = data[np.newaxis]  # treat as single-channel: (C, Y, X)
     if data.ndim not in (3, 4, 5):
-        raise ValueError(f"Expected 3D, 4D, or 5D input, got shape {data.shape}")
+        raise ValueError(f"Expected 2D–5D input, got shape {data.shape}")
 
     axis_letters, default_order = _choose_axes_for_ndim(
         data.ndim,
@@ -195,14 +226,31 @@ def _load_as_TZCYX(
 
 def _center_crop_2d(img, crop=None):
     """
-    Center crop a 2D image.
-    crop=int -> square crop
-    crop=(crop_y, crop_x) -> rectangular crop
+    Crop a 2D image.
+
+    crop=int               -> centered square crop of that size
+    crop=(h, w)            -> centered rectangular crop
+    crop=((y0,x0),(y1,x1)) -> arbitrary crop from (y0,x0) to (y1,x1) exclusive
     """
     if crop is None:
         return img
 
     H, W = img.shape
+
+    if isinstance(crop, (list, tuple)) and isinstance(crop[0], (list, tuple)):
+        pt, second = crop
+        if isinstance(second, int):
+            # ((cy, cx), r) -> center crop
+            cy, cx = pt
+            r = second
+            y0 = max(0, int(cy) - r); x0 = max(0, int(cx) - r)
+            y1 = min(H, int(cy) + r); x1 = min(W, int(cx) + r)
+        else:
+            # ((y0, x0), (y1, x1)) -> arbitrary crop
+            (y0, x0), (y1, x1) = pt, second
+            y0 = max(0, int(y0)); x0 = max(0, int(x0))
+            y1 = min(H, int(y1)); x1 = min(W, int(x1))
+        return img[y0:y1, x0:x1]
 
     if isinstance(crop, int):
         crop_y = crop_x = crop
@@ -593,6 +641,8 @@ def plot_multichannel_plane_montage(
     ch_n=None,
     x_dim=None,
     y_dim=None,
+    axes: str | None = None,
+    define_axes: bool = False,
     palette=None,
     arrange="row",
     crop=None,
@@ -650,6 +700,16 @@ def plot_multichannel_plane_montage(
 
     stack_n, image_n, ch_n, x_dim, y_dim : int | None
         Expected sizes for Z, T, C, X, and Y used for axis inference.
+        Ignored if `axes` is provided.
+
+    axes : str | None
+        Explicit axis order string, e.g. ``"TZCYX"`` or ``"TCYX"``.
+        If provided, skips automatic inference entirely.
+
+    define_axes : bool, default False
+        If True and `axes` is None, opens the axis-labeling GUI on the first
+        movie (same dialog used by make_croparrays) and uses the result for
+        all movies in the batch.
 
     palette : sequence[str] | None
         One matplotlib-compatible color per channel, e.g. ("green", "magenta").
@@ -661,10 +721,12 @@ def plot_multichannel_plane_montage(
         - "row": each movie occupies one row, with panels arranged left-to-right
         - "column": each movie occupies one column, with panels arranged top-to-bottom
 
-    crop : int | tuple[int, int] | None
-        Center crop to apply before plotting.
-        - int: use a square crop of size crop x crop
-        - (crop_y, crop_x): use a rectangular crop
+    crop : int | tuple | None
+        Crop to apply before plotting.
+        - int: centered square crop of that size
+        - (h, w): centered rectangular crop
+        - ((cy, cx), r): square crop centered at (cy, cx) with half-width r
+        - ((y0, x0), (y1, x1)): arbitrary crop from top-left to bottom-right
         - None: no cropping
 
     labels : sequence[str] | None
@@ -776,16 +838,25 @@ def plot_multichannel_plane_montage(
     movies = _ensure_list_of_movies(tiff_movies)
     n_movies = len(movies)
 
+    axes_use = axes
+    if axes_use is None and define_axes:
+        from . import gui as _gui
+        first_path = movies[0] if isinstance(movies[0], (str, Path)) else None
+        axes_use = "".join(_gui.define_video_axes(path=first_path).axes)
+
     loaded = []
     for movie in movies:
-        data_tzcyx = _load_as_TZCYX(
-            movie,
-            stack_n=stack_n,
-            image_n=image_n,
-            ch_n=ch_n,
-            x_dim=x_dim,
-            y_dim=y_dim,
-        )
+        if axes_use is not None:
+            data_tzcyx = _load_as_TZCYX_from_axes(movie, axes_use)
+        else:
+            data_tzcyx = _load_as_TZCYX(
+                movie,
+                stack_n=stack_n,
+                image_n=image_n,
+                ch_n=ch_n,
+                x_dim=x_dim,
+                y_dim=y_dim,
+            )
         loaded.append(data_tzcyx)
 
     # require same channel count across movies
@@ -923,9 +994,11 @@ def plot_multichannel_plane_montage(
             else:
                 panel_label = channel_labels[c_idx]
 
+            label_color = palette[c_idx] if ptype != "Merge" else text_color
+
             if arrange == "row":
                 if add_channel_labels or ptype == "Merge":
-                    ax.set_title(panel_label, fontsize=label_fontsize, color=text_color)
+                    ax.set_title(panel_label, fontsize=label_fontsize, color=label_color)
                 if movie_labels is not None and p_idx == 0:
                     ax.set_ylabel(movie_labels[m_idx], fontsize=label_fontsize, color=text_color)
             else:
@@ -939,7 +1012,7 @@ def plot_multichannel_plane_montage(
                             rotation=0,
                             labelpad=35,
                             va="center",
-                            color=text_color,
+                            color=label_color,
                         )
 
             # Decide whether to draw the scale bar on this panel
