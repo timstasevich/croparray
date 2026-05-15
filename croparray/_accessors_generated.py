@@ -1201,8 +1201,11 @@ dict
     received a polygon (``None`` for videos left without one)."""
         return _impl_CropArrayBuild_review_rois(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index)
 
-    def make_csvs(self, videos, detect_ch=0, axes=None, define_axes=True, axes_source_index=0, diameter=7, minmass='auto', separation=None, percentile=64, track=True, search_range=5, memory=2, min_track_len=3, out_dir=None, out_suffix='_allspots', skip_existing=True, progress=True):
-        """Detect spots with TrackPy and save one CSV per video, ready for make_croparrays.
+    def make_csvs(self, videos, detect_ch=0, axes=None, define_axes=True, axes_source_index=0, diameter=7, minmass='auto', separation=None, percentile=64, track=True, search_range=5, memory=2, min_track_len=3, out_dir=None, spots_suffix='_spots', tracks_suffix='_tracks', skip_existing=True, progress=True):
+        """Detect spots with TrackPy and save CSVs per video, ready for make_croparrays.
+
+Always saves all detected spots as {stem}{spots_suffix}.csv.
+If track=True, also saves linked+filtered tracks as {stem}{tracks_suffix}.csv.
 
 Parameters
 ----------
@@ -1231,16 +1234,18 @@ min_track_len
     Discard tracks shorter than this (frames).
 out_dir
     Directory for CSV output. Defaults to each video's parent directory.
-out_suffix
-    String appended to the video stem before '.csv'.
+spots_suffix
+    Suffix for the all-detections CSV (default '_spots').
+tracks_suffix
+    Suffix for the linked-tracks CSV when track=True (default '_tracks').
 skip_existing
-    If True, skip videos whose output CSV already exists.
+    If True, skip videos where all expected output CSVs already exist.
 
 Returns
 -------
 list of Path
-    Paths of written CSV files."""
-        return _impl_CropArrayBuild_make_csvs(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, diameter=diameter, minmass=minmass, separation=separation, percentile=percentile, track=track, search_range=search_range, memory=memory, min_track_len=min_track_len, out_dir=out_dir, out_suffix=out_suffix, skip_existing=skip_existing, progress=progress)
+    Paths of all written CSV files."""
+        return _impl_CropArrayBuild_make_csvs(videos, detect_ch=detect_ch, axes=axes, define_axes=define_axes, axes_source_index=axes_source_index, diameter=diameter, minmass=minmass, separation=separation, percentile=percentile, track=track, search_range=search_range, memory=memory, min_track_len=min_track_len, out_dir=out_dir, spots_suffix=spots_suffix, tracks_suffix=tracks_suffix, skip_existing=skip_existing, progress=progress)
 
 
 CropArrayBuild.standardize_video_axes.__doc__ = _impl_CropArrayBuild_standardize_video_axes.__doc__
@@ -2011,7 +2016,7 @@ is not taken over 'exp' or 'fov'. The estimated drift trace is simply
 subtracted from each coordinate; any constant offset is irrelevant for MSD."""
         return _impl_TrackArrayMeasure_msd(self.ds, xvar, yvar, zvar, name, space, drift_correct, drift_dims)
 
-    def autocorr(self, var='signal', out_name=None, max_lag=None, bleach_correct=False):
+    def autocorr(self, var='signal', out_name=None, max_lag=None, bleach_correct=False, correct_missing=True):
         """Compute per-track FFT autocorrelation G(Δt) and store it in the dataset.
 
 Works like `msd`: the `t` dimension of the output represents lag time (Δt),
@@ -2037,7 +2042,7 @@ Returns
 -------
 ta
     Same TrackArray (or Dataset) with ``out_name`` added in place."""
-        return _impl_TrackArrayMeasure_autocorr(self.ds, var=var, out_name=out_name, max_lag=max_lag, bleach_correct=bleach_correct)
+        return _impl_TrackArrayMeasure_autocorr(self.ds, var=var, out_name=out_name, max_lag=max_lag, bleach_correct=bleach_correct, correct_missing=correct_missing)
 
 
 TrackArrayMeasure.best_z_proj.__doc__ = _impl_TrackArrayMeasure_best_z_proj.__doc__
