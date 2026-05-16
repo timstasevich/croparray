@@ -77,7 +77,6 @@ def track_length(
     *,
     coord: str = "xc",
     out_name: str = "track_length",
-    broadcast_like: str | None = "signal",
 ):
     """
     Compute per-track length as the number of timepoints where the track exists,
@@ -93,13 +92,12 @@ def track_length(
     if coord not in ds:
         raise KeyError(f"'{coord}' not found in dataset")
 
-    present = ds[coord].notnull()
+    da = ds[coord]
+    if "ch" in da.dims:
+        da = da.isel(ch=0)
+    present = da.notnull()
     track_length_track = present.sum(dim="t")
-
-    if broadcast_like is not None and broadcast_like in ds:
-        ds[out_name] = track_length_track.broadcast_like(ds[broadcast_like])
-    else:
-        ds[out_name] = track_length_track.broadcast_like(present)
+    ds[out_name] = track_length_track
 
     ds[out_name].attrs.update(
         {
