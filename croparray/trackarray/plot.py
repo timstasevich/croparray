@@ -383,9 +383,10 @@ def plot_track_signal_traces(
     ylim=None,
     xlim=None,
     col_wrap: int = 3,
-    y2: Optional[int] = None,
+    y2: Optional[Union[int, str]] = None,
     y2lim=None,
     y2_label: Optional[str] = None,
+    y2_color: Optional[str] = None,
     legend_loc: str = "upper right",
     show_legend: bool = True,
 ) -> None:
@@ -418,10 +419,13 @@ def plot_track_signal_traces(
     col_wrap
         Number of columns in the subplot grid.
     y2
-        If not None, place that channel index on a secondary (right) y-axis.
-        Only applies to channelled variables.
+        If an int, place that channel index on a secondary (right) y-axis (legacy behavior).
+        If a str, treat as a variable name to plot on the right y-axis (may be channel-less).
     y2lim, y2_label
         Right-axis limits/label.
+    y2_color
+        Color for the right y-axis line/ticks/label. Defaults to "gray" when y2 is a variable
+        name, or the corresponding channel color when y2 is an int.
     legend_loc
         'upper right', 'best', etc. Use 'outside' to place legend outside axes.
     show_legend
@@ -444,6 +448,14 @@ def plot_track_signal_traces(
 
     # Determine whether this variable is channelled in the dataframe.
     has_ch = ("ch" in df.columns) and df["ch"].notna().any()
+
+    # y2 as a variable name: load a separate df for the right axis.
+    y2_is_var = isinstance(y2, str)
+    df2 = None
+    if y2_is_var:
+        if y2 not in ta_dataset:
+            raise KeyError(f"y2 variable {y2!r} not found. Available: {list(ta_dataset.data_vars)}")
+        df2 = variables_to_df(ta_dataset, [y2])
 
     n = len(track_ids)
     ncols = int(col_wrap)
@@ -471,7 +483,7 @@ def plot_track_signal_traces(
         row, col = divmod(idx, ncols)
         ax = axes[row][col]
 
-        ax2 = ax.twinx() if (has_ch and y2 is not None) else None
+        ax2 = ax.twinx() if (y2_is_var or (has_ch and y2 is not None)) else None
 
         if not has_ch:
             subset = df[df["track_id"] == track_id]
@@ -543,6 +555,24 @@ def plot_track_signal_traces(
                     legend=False,
                 )
 
+        # Plot y2 variable (string case) on right axis.
+        if y2_is_var and ax2 is not None and df2 is not None:
+            subset2 = df2[df2["track_id"] == track_id]
+            if "ch" in subset2.columns and subset2["ch"].notna().any():
+                subset2 = subset2[subset2["ch"] == subset2["ch"].iloc[0]]
+            if not subset2.empty:
+                _y2_color = y2_color or "gray"
+                sns.lineplot(
+                    data=subset2, x="t", y=y2, ax=ax2,
+                    color=_y2_color, lw=2, dashes=False, legend=False,
+                    marker="o", markersize=marker_size, markevery=markevery,
+                )
+                mean_df2 = subset2.groupby("t")[y2].mean().reset_index()
+                sns.scatterplot(
+                    data=mean_df2, x="t", y=y2, ax=ax2,
+                    color=_y2_color, s=scatter_size, legend=False,
+                )
+
         ax.set_title(f"Track {int(track_id)}")
         ax.set_xlabel("time (sec)")
         ax.set_ylabel(f"{var} (a.u.)")
@@ -552,8 +582,12 @@ def plot_track_signal_traces(
             ax.set_xlim(xlim)
 
         if ax2 is not None:
-            right_color = colors[int(y2) % len(colors)]
-            ax2.set_ylabel(y2_label or f"{var} (a.u.) [ch {y2}]", color=right_color)
+            if y2_is_var:
+                right_color = y2_color or "gray"
+                ax2.set_ylabel(y2_label or y2, color=right_color)
+            else:
+                right_color = colors[int(y2) % len(colors)]
+                ax2.set_ylabel(y2_label or f"{var} (a.u.) [ch {y2}]", color=right_color)
             if y2lim is not None:
                 ax2.set_ylim(y2lim)
             if xlim is not None:

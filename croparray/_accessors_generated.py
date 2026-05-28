@@ -1318,8 +1318,8 @@ pathlib.Path
     The written file path."""
         return _impl_CropArrayIO_save_croparray(obj, output_dir=output_dir, filename=filename, ext=ext, overwrite=overwrite, mkdir=mkdir, to_netcdf_kwargs=to_netcdf_kwargs)
 
-    def open_trackarray(self, path, as_object=True, load_manual_filters=True, **kwargs):
-        return _impl_CropArrayIO_open_trackarray(path, as_object=as_object, load_manual_filters=load_manual_filters, **kwargs)
+    def open_trackarray(self, path, as_object=True, load_manual_filters=True, load=False, **kwargs):
+        return _impl_CropArrayIO_open_trackarray(path, as_object=as_object, load_manual_filters=load_manual_filters, load=load, **kwargs)
 
     def open_as_trackarray(self, path, drop_vars=('int',), drop_errors='ignore', as_object=True, load_manual_filters=True, **kwargs):
         """Open a CropArray dataset and immediately convert it to a TrackArray.
@@ -1592,7 +1592,7 @@ dict[int, xr.DataArray]
     Mapping track_id -> normalized DataArray used for plotting."""
         return _impl_TrackArrayPlot_plot_trackarray_crops(self.ds, layer=layer, fov=fov, track_ids=track_ids, t=t, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
-    def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, legend_loc='upper right', show_legend=True):
+    def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, y2_color=None, legend_loc='upper right', show_legend=True):
         """Plot per-track traces for a chosen variable (default: 'signal').
 
 Works for both:
@@ -1621,10 +1621,13 @@ ylim, xlim
 col_wrap
     Number of columns in the subplot grid.
 y2
-    If not None, place that channel index on a secondary (right) y-axis.
-    Only applies to channelled variables.
+    If an int, place that channel index on a secondary (right) y-axis (legacy behavior).
+    If a str, treat as a variable name to plot on the right y-axis (may be channel-less).
 y2lim, y2_label
     Right-axis limits/label.
+y2_color
+    Color for the right y-axis line/ticks/label. Defaults to "gray" when y2 is a variable
+    name, or the corresponding channel color when y2 is an int.
 legend_loc
     'upper right', 'best', etc. Use 'outside' to place legend outside axes.
 show_legend
@@ -1634,7 +1637,7 @@ Returns
 -------
 None
     Displays the figure via matplotlib."""
-        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, legend_loc=legend_loc, show_legend=show_legend)
+        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, y2_color=y2_color, legend_loc=legend_loc, show_legend=show_legend)
 
     def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, color_time=False, time_var='t', time_palette='viridis', add_colorbar=True, label_tracks=False, label_offset=0.1, label_fontsize=8, facet_kws=None, **kwargs):
         """Plot XY trajectories with optional faceting and optional time-colored paths.
@@ -1956,14 +1959,14 @@ Returns
 np.ndarray or xarray.DataArray"""
         return _impl_TrackArrayMeasure_tracklist(self.ds, var=var, min_count=min_count, return_mask=return_mask)
 
-    def track_length(self, coord='xc', out_name='track_length', broadcast_like='signal'):
+    def track_length(self, coord='xc', out_name='track_length'):
         """Compute per-track length as the number of timepoints where the track exists,
 independent of fluorescence intensity.
 
 Track existence is defined by `coord.notnull()`. By croparray convention,
 coordinates such as 'xc' are NaN at timepoints where no detection exists
 for that track."""
-        return _impl_TrackArrayMeasure_track_length(self.ds, coord=coord, out_name=out_name, broadcast_like=broadcast_like)
+        return _impl_TrackArrayMeasure_track_length(self.ds, coord=coord, out_name=out_name)
 
     def step_size(self, xvar='xc', yvar='yc', zvar=None, name='step_size', space='units'):
         """Compute frame-to-frame step size and return as a DataArray.

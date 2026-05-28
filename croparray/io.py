@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Literal, overload, Union
+import shutil
+import tempfile
 import xarray as xr
 from .crop_array_object import CropArray
 import os
@@ -300,6 +302,7 @@ def open_trackarray(
     *,
     as_object: Literal[True] = True,
     load_manual_filters: bool = True,
+    load: bool = False,
     **kwargs: Any,
 ) -> TrackArray: ...
 @overload
@@ -308,6 +311,7 @@ def open_trackarray(
     *,
     as_object: Literal[False],
     load_manual_filters: bool = True,
+    load: bool = False,
     **kwargs: Any,
 ) -> xr.Dataset: ...
 def open_trackarray(
@@ -315,9 +319,18 @@ def open_trackarray(
     *,
     as_object: bool = True,
     load_manual_filters: bool = True,
+    load: bool = False,
     **kwargs: Any,
 ) -> TrackArray | xr.Dataset:
-    ds = xr.open_dataset(path, **kwargs)
+    if load:
+        # Copy to a local temp file so HDF5 reads don't fail over NAS/network drives.
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+            tmp_path = tmp.name
+        shutil.copy(path, tmp_path)
+        ds = xr.load_dataset(tmp_path, **kwargs)
+        os.unlink(tmp_path)
+    else:
+        ds = xr.open_dataset(path, **kwargs)
 
     if "track_id" not in ds.dims:
         raise ValueError(
