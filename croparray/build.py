@@ -446,8 +446,13 @@ def standardize_spots(
         units = _trackmate_units_from_csv(path)
         df = _read_trackmate_csv(path)
     else:
-        # For trackpy/croparray/unknown: straight read for now
-        df = pd.read_csv(path)
+        # For trackpy/croparray/unknown: try common encodings, latin-1 always succeeds.
+        for _enc in ("utf-8", "utf-8-sig", "latin-1"):
+            try:
+                df = pd.read_csv(path, encoding=_enc)
+                break
+            except UnicodeDecodeError:
+                continue
 
         # If auto-detect said unknown, try column sniff now that we have the header
         if tracker_lc == "unknown":
