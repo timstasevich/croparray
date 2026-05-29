@@ -41,13 +41,17 @@ def _detect_tracker_from_columns(cols) -> str:
 
 def _detect_tracker_from_path(path: Path) -> str:
     # quick sniff: TrackMate has those POSITION_* headers on row 0
-    try:
-        df0 = pd.read_csv(path, nrows=1)
-        t = _detect_tracker_from_columns(df0.columns)
-        if t != "unknown":
-            return t
-    except Exception:
-        pass
+    for _enc in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            df0 = pd.read_csv(path, nrows=1, encoding=_enc)
+            t = _detect_tracker_from_columns(df0.columns)
+            if t != "unknown":
+                return t
+            break
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            break
     return "unknown"
 
 def _trackmate_units_from_csv(path: Path) -> dict:
@@ -57,13 +61,19 @@ def _trackmate_units_from_csv(path: Path) -> dict:
     """
     import csv
 
-    with path.open("r", newline="") as f:
-        reader = csv.reader(f)
-        rows = []
-        for i, row in enumerate(reader):
-            rows.append(row)
-            if i >= 6:
-                break
+    import csv as _csv
+    rows = []
+    for _enc in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            with path.open("r", newline="", encoding=_enc) as f:
+                for i, row in enumerate(_csv.reader(f)):
+                    rows.append(row)
+                    if i >= 6:
+                        break
+            break
+        except UnicodeDecodeError:
+            rows = []
+            continue
 
     if len(rows) < 4:
         return {}
@@ -82,14 +92,19 @@ def _trackmate_units_from_csv(path: Path) -> dict:
 
 def _read_trackmate_csv(path: Path) -> "pd.DataFrame":
     # robust TrackMate preamble handling (skips abbrev/units rows)
-    import csv
-    with path.open("r", newline="") as f:
-        reader = csv.reader(f)
-        rows = []
-        for i, row in enumerate(reader):
-            rows.append(row)
-            if i >= 25:
-                break
+    import csv as _csv
+    rows = []
+    for _enc in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            with path.open("r", newline="", encoding=_enc) as f:
+                for i, row in enumerate(_csv.reader(f)):
+                    rows.append(row)
+                    if i >= 25:
+                        break
+            break
+        except UnicodeDecodeError:
+            rows = []
+            continue
 
     if not rows:
         raise ValueError(f"Empty CSV: {path}")
@@ -100,7 +115,11 @@ def _read_trackmate_csv(path: Path) -> "pd.DataFrame":
     except ValueError:
         # common TrackMate export: 3-line preamble
         skiprows = [1, 2, 3]
-        return pd.read_csv(path, header=0, skiprows=skiprows)
+        for _enc in ("utf-8", "utf-8-sig", "latin-1"):
+            try:
+                return pd.read_csv(path, header=0, skiprows=skiprows, encoding=_enc)
+            except UnicodeDecodeError:
+                continue
 
     start_row = 1
     for i in range(1, len(rows)):
@@ -110,7 +129,11 @@ def _read_trackmate_csv(path: Path) -> "pd.DataFrame":
             break
 
     skiprows = list(range(1, start_row))
-    return pd.read_csv(path, header=0, skiprows=skiprows)
+    for _enc in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            return pd.read_csv(path, header=0, skiprows=skiprows, encoding=_enc)
+        except UnicodeDecodeError:
+            continue
 
 def _standardize_spots_df(
     df: "pd.DataFrame",
