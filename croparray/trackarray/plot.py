@@ -408,6 +408,7 @@ def plot_track_signal_traces(
     y2_color: Optional[str] = None,
     legend_loc: str = "upper right",
     show_legend: bool = True,
+    despine: bool = False,
     save_path: Optional[str] = None,
     transparent: bool = False,
 ) -> None:
@@ -451,6 +452,9 @@ def plot_track_signal_traces(
         'upper right', 'best', etc. Use 'outside' to place legend outside axes.
     show_legend
         Toggle legend on/off.
+    despine
+        If True, remove the top (and, for single-axis plots, right) spine so panels
+        read as open axes rather than a boxed frame.
     save_path
         If given, save the figure here instead of displaying it inline.
     transparent
@@ -473,6 +477,12 @@ def plot_track_signal_traces(
 
     # Determine whether this variable is channelled in the dataframe.
     has_ch = ("ch" in df.columns) and df["ch"].notna().any()
+
+    # Derive the time axis label from the dataset's actual units instead of assuming seconds.
+    t_units = ta_dataset.attrs.get("t_units")
+    if not t_units and "t" in ta_dataset.coords:
+        t_units = ta_dataset["t"].attrs.get("units")
+    time_label = f"time ({t_units})" if t_units else "time"
 
     # y2 as a variable name: load a separate df for the right axis.
     y2_is_var = isinstance(y2, str)
@@ -599,7 +609,7 @@ def plot_track_signal_traces(
                 )
 
         ax.set_title(f"Track {int(track_id)}")
-        ax.set_xlabel("time (sec)")
+        ax.set_xlabel(time_label)
         ax.set_ylabel(f"{var} (a.u.)")
         if ylim is not None:
             ax.set_ylim(ylim)
@@ -619,6 +629,13 @@ def plot_track_signal_traces(
                 ax2.set_xlim(xlim)
             ax2.tick_params(axis="y", colors=right_color)
             ax2.spines["right"].set_color(right_color)
+
+        if despine:
+            ax.spines["top"].set_visible(False)
+            if ax2 is None:
+                ax.spines["right"].set_visible(False)
+            else:
+                ax2.spines["top"].set_visible(False)
 
         if show_legend and has_ch:
             h1, l1 = ax.get_legend_handles_labels()

@@ -1592,7 +1592,7 @@ dict[int, xr.DataArray]
     Mapping track_id -> normalized DataArray used for plotting."""
         return _impl_TrackArrayPlot_plot_trackarray_crops(self.ds, layer=layer, fov=fov, track_ids=track_ids, t=t, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
-    def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, y2_color=None, legend_loc='upper right', show_legend=True, save_path=None, transparent=False):
+    def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, y2_color=None, legend_loc='upper right', show_legend=True, despine=False, save_path=None, transparent=False):
         """Plot per-track traces for a chosen variable (default: 'signal').
 
 Works for both:
@@ -1632,6 +1632,9 @@ legend_loc
     'upper right', 'best', etc. Use 'outside' to place legend outside axes.
 show_legend
     Toggle legend on/off.
+despine
+    If True, remove the top (and, for single-axis plots, right) spine so panels
+    read as open axes rather than a boxed frame.
 save_path
     If given, save the figure here instead of displaying it inline.
 transparent
@@ -1641,7 +1644,7 @@ Returns
 -------
 None
     Displays the figure via matplotlib."""
-        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, y2_color=y2_color, legend_loc=legend_loc, show_legend=show_legend, save_path=save_path, transparent=transparent)
+        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, y2_color=y2_color, legend_loc=legend_loc, show_legend=show_legend, despine=despine, save_path=save_path, transparent=transparent)
 
     def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, color_time=False, time_var='t', time_palette='viridis', add_colorbar=True, label_tracks=False, label_offset=0.1, label_fontsize=8, facet_kws=None, **kwargs):
         """Plot XY trajectories with optional faceting and optional time-colored paths.
