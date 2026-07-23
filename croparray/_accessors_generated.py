@@ -1592,7 +1592,7 @@ dict[int, xr.DataArray]
     Mapping track_id -> normalized DataArray used for plotting."""
         return _impl_TrackArrayPlot_plot_trackarray_crops(self.ds, layer=layer, fov=fov, track_ids=track_ids, t=t, rolling=rolling, quantile_range=quantile_range, show_grayscale=show_grayscale, show_merge_chs=show_merge_chs, ch=ch, suppress_labels=suppress_labels, show_suptitle=show_suptitle)
 
-    def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, y2_color=None, legend_loc='upper right', show_legend=True, despine=False, show_titles=True, save_path=None, transparent=False):
+    def plot_track_signal_traces(self, track_ids, var='signal', rgb=(1, 1, 1), colors=('#00f670', '#f67000', '#7000f6'), markers=('o', 's', 'D'), marker_size=6, scatter_size=25, markevery=5, linewidth=2, figsize=(7, 2.8), ylim=None, xlim=None, col_wrap=3, y2=None, y2lim=None, y2_label=None, y2_color=None, legend_loc='upper right', show_legend=True, despine=False, show_titles=True, sharex=False, hspace=None, save_path=None, transparent=False):
         """Plot per-track traces for a chosen variable (default: 'signal').
 
 Works for both:
@@ -1614,6 +1614,9 @@ colors, markers
     Per-channel colors/markers (cycled by channel index).
 marker_size, scatter_size, markevery
     Marker and scatter display controls.
+linewidth
+    Line width for all traces (does not scale with sns.set_context(), unlike
+    seaborn's own plotting functions -- set this explicitly to match).
 figsize
     Base size per subplot; actual figure size scales with `col_wrap` and number of tracks.
 ylim, xlim
@@ -1637,6 +1640,13 @@ despine
     read as open axes rather than a boxed frame.
 show_titles
     If False, skip the per-panel "Track N" title.
+sharex
+    If True, hide the x tick labels and x-axis label on every panel except the
+    bottom-most one in each column, for a compressed, stacked-traces look.
+hspace
+    Vertical spacing between rows, passed to `fig.subplots_adjust`. Use a small
+    or negative value (e.g. 0 or slightly negative) together with `sharex=True`
+    to push stacked panels close together.
 save_path
     If given, save the figure here instead of displaying it inline.
 transparent
@@ -1646,7 +1656,7 @@ Returns
 -------
 None
     Displays the figure via matplotlib."""
-        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, y2_color=y2_color, legend_loc=legend_loc, show_legend=show_legend, despine=despine, show_titles=show_titles, save_path=save_path, transparent=transparent)
+        return _impl_TrackArrayPlot_plot_track_signal_traces(self.ds, track_ids, var=var, rgb=rgb, colors=colors, markers=markers, marker_size=marker_size, scatter_size=scatter_size, markevery=markevery, linewidth=linewidth, figsize=figsize, ylim=ylim, xlim=xlim, col_wrap=col_wrap, y2=y2, y2lim=y2lim, y2_label=y2_label, y2_color=y2_color, legend_loc=legend_loc, show_legend=show_legend, despine=despine, show_titles=show_titles, sharex=sharex, hspace=hspace, save_path=save_path, transparent=transparent)
 
     def trajectories_xy(self, xvar='xc', yvar='yc', hue=None, col=None, row=None, space='units', center_tracks=False, alpha=0.5, linewidth=1.0, height=4, aspect=1, dropna=True, legend=True, color_time=False, time_var='t', time_palette='viridis', add_colorbar=True, label_tracks=False, label_offset=0.1, label_fontsize=8, facet_kws=None, **kwargs):
         """Plot XY trajectories with optional faceting and optional time-colored paths.

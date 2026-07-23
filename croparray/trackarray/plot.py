@@ -398,6 +398,7 @@ def plot_track_signal_traces(
     marker_size: int = 6,
     scatter_size: int = 25,
     markevery: int = 5,
+    linewidth: float = 2,
     figsize: Tuple[float, float] = (7, 2.8),
     ylim=None,
     xlim=None,
@@ -410,6 +411,8 @@ def plot_track_signal_traces(
     show_legend: bool = True,
     despine: bool = False,
     show_titles: bool = True,
+    sharex: bool = False,
+    hspace: Optional[float] = None,
     save_path: Optional[str] = None,
     transparent: bool = False,
 ) -> None:
@@ -435,6 +438,9 @@ def plot_track_signal_traces(
         Per-channel colors/markers (cycled by channel index).
     marker_size, scatter_size, markevery
         Marker and scatter display controls.
+    linewidth
+        Line width for all traces (does not scale with sns.set_context(), unlike
+        seaborn's own plotting functions -- set this explicitly to match).
     figsize
         Base size per subplot; actual figure size scales with `col_wrap` and number of tracks.
     ylim, xlim
@@ -458,6 +464,13 @@ def plot_track_signal_traces(
         read as open axes rather than a boxed frame.
     show_titles
         If False, skip the per-panel "Track N" title.
+    sharex
+        If True, hide the x tick labels and x-axis label on every panel except the
+        bottom-most one in each column, for a compressed, stacked-traces look.
+    hspace
+        Vertical spacing between rows, passed to `fig.subplots_adjust`. Use a small
+        or negative value (e.g. 0 or slightly negative) together with `sharex=True`
+        to push stacked panels close together.
     save_path
         If given, save the figure here instead of displaying it inline.
     transparent
@@ -535,7 +548,7 @@ def plot_track_signal_traces(
                     y=var,
                     ax=ax,
                     color=color0,
-                    lw=2,
+                    lw=linewidth,
                     dashes=False,
                     legend=False,
                     marker=marker0,
@@ -574,7 +587,7 @@ def plot_track_signal_traces(
                     ax=target_ax,
                     color=color,
                     label=f"ch {ch_i}",
-                    lw=2,
+                    lw=linewidth,
                     dashes=False,
                     legend=False,
                     marker=marker,
@@ -602,7 +615,7 @@ def plot_track_signal_traces(
                 _y2_color = y2_color or "gray"
                 sns.lineplot(
                     data=subset2, x="t", y=y2, ax=ax2,
-                    color=_y2_color, lw=2, dashes=False, legend=False,
+                    color=_y2_color, lw=linewidth, dashes=False, legend=False,
                     marker="o", markersize=marker_size, markevery=markevery,
                 )
                 mean_df2 = subset2.groupby("t")[y2].mean().reset_index()
@@ -666,10 +679,24 @@ def plot_track_signal_traces(
         r, c = divmod(j, ncols)
         fig.delaxes(axes[r][c])
 
+    if sharex:
+        for c in range(ncols):
+            rows_in_col = [r for r in range(nrows) if r * ncols + c < n]
+            if not rows_in_col:
+                continue
+            bottom_row = max(rows_in_col)
+            for r in rows_in_col:
+                if r != bottom_row:
+                    ax = axes[r][c]
+                    ax.set_xlabel("")
+                    ax.tick_params(labelbottom=False)
+
     if legend_loc == "outside":
         fig.subplots_adjust(right=0.82)
 
     plt.tight_layout()
+    if hspace is not None:
+        fig.subplots_adjust(hspace=hspace)
     _finish_figure(fig, save_path=save_path, transparent=transparent)
 
 
