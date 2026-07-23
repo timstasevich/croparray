@@ -167,6 +167,25 @@ def _facetgrid_cleanup(g, *, suppress_labels: bool, suptitle: Optional[str]) -> 
             pass
 
 
+def _finish_figure(fig, *, save_path=None, transparent=False, **savefig_kwargs):
+    """
+    Either save `fig` to disk or display it, but never both.
+
+    Notebook inline backends close a figure the moment `plt.show()` runs, so
+    grabbing `plt.gcf()` afterward (e.g. to save it) yields a blank figure.
+    Passing `save_path` here sidesteps that entirely by saving instead of showing.
+    """
+    if save_path is not None:
+        if transparent:
+            fig.patch.set_alpha(0)
+            for ax in fig.axes:
+                ax.set_facecolor("none")
+        fig.savefig(save_path, transparent=transparent, bbox_inches="tight", **savefig_kwargs)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
 # -----------------------
 # Public API
 # -----------------------
@@ -389,6 +408,8 @@ def plot_track_signal_traces(
     y2_color: Optional[str] = None,
     legend_loc: str = "upper right",
     show_legend: bool = True,
+    save_path: Optional[str] = None,
+    transparent: bool = False,
 ) -> None:
     """
     Plot per-track traces for a chosen variable (default: 'signal').
@@ -430,6 +451,10 @@ def plot_track_signal_traces(
         'upper right', 'best', etc. Use 'outside' to place legend outside axes.
     show_legend
         Toggle legend on/off.
+    save_path
+        If given, save the figure here instead of displaying it inline.
+    transparent
+        If True (and save_path is given), save with a transparent background.
 
     Returns
     -------
@@ -624,7 +649,7 @@ def plot_track_signal_traces(
         fig.subplots_adjust(right=0.82)
 
     plt.tight_layout()
-    plt.show()
+    _finish_figure(fig, save_path=save_path, transparent=transparent)
 
 
 

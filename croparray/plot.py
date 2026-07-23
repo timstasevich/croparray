@@ -281,7 +281,27 @@ def rescale_rgb_0_255(arr):
     out = np.clip(out * 255, 0, 255).astype(np.uint8)
     return out
 
-def show_rgb_large(img8, *, scale=1.0, title=None):
+def _finish_figure(fig, *, save_path=None, transparent=False, **savefig_kwargs):
+    """
+    Either save `fig` to disk or display it, but never both.
+
+    Notebook inline backends close a figure the moment `plt.show()` runs, so
+    grabbing `plt.gcf()` afterward (e.g. to save it) yields a blank figure.
+    Passing `save_path` here sidesteps that entirely by saving instead of showing.
+    """
+    import matplotlib.pyplot as plt
+
+    if save_path is not None:
+        if transparent:
+            fig.patch.set_alpha(0)
+            for ax in fig.axes:
+                ax.set_facecolor("none")
+        fig.savefig(save_path, transparent=transparent, bbox_inches="tight", **savefig_kwargs)
+        plt.close(fig)
+    else:
+        plt.show()
+
+def show_rgb_large(img8, *, scale=1.0, title=None, save_path=None, transparent=False):
     """
     Display an RGB image at an appropriate physical size in matplotlib.
 
@@ -291,6 +311,10 @@ def show_rgb_large(img8, *, scale=1.0, title=None):
         (Y, X, 3) uint8 image
     scale : float
         Multiplicative scale factor for display size (1.0 ≈ 1 pixel = 1/100 inch)
+    save_path : str or None
+        If given, save the figure here instead of displaying it.
+    transparent : bool
+        If True (and save_path is given), save with a transparent background.
     """
     import matplotlib.pyplot as plt
     h, w = img8.shape[:2]
@@ -301,7 +325,7 @@ def show_rgb_large(img8, *, scale=1.0, title=None):
     plt.axis("off")
     if title:
         plt.title(title)
-    plt.show()
+    _finish_figure(fig, save_path=save_path, transparent=transparent)
 
 # --- Seaborn figure-level wrappers (relplot/displot/catplot) -----------------
 
