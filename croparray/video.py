@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import numpy as np
 import tifffile as tiff
 import matplotlib.pyplot as plt
@@ -147,6 +148,19 @@ def _ensure_list_of_movies(tiff_movies):
         return [tiff_movies]
     return list(tiff_movies)
 
+# Maps gui.define_video_axes labels (multi-char) to single-char TZCYX axes
+_GUI_LABEL_TO_TZCYX = {"f": "t", "fov": "t", "z": "z", "ch": "c", "y": "y", "x": "x"}
+
+
+def _gui_labels_to_axes_str(labels) -> str:
+    """Convert define_video_axes result labels to a single-char axes string.
+
+    e.g. ("f", "ch", "y", "x") -> "tcyx"
+         ("f", "z", "ch", "y", "x") -> "tzcyx"
+    """
+    return "".join(_GUI_LABEL_TO_TZCYX.get(a.lower(), a.lower()) for a in labels)
+
+
 def _load_as_TZCYX_from_axes(tiff_movie, axes: str):
     """Load TIFF or array and reorder to canonical (T, Z, C, Y, X) using an explicit axes string."""
     if isinstance(tiff_movie, (str, Path)):
@@ -228,8 +242,9 @@ def _center_crop_2d(img, crop=None):
     """
     Crop a 2D image.
 
-    crop=int               -> centered square crop of that size
+    crop=int               -> centered square crop of that side length
     crop=(h, w)            -> centered rectangular crop
+    crop=((cy,cx), w)      -> square of side w centered on (cy, cx)
     crop=((y0,x0),(y1,x1)) -> arbitrary crop from (y0,x0) to (y1,x1) exclusive
     """
     if crop is None:
@@ -239,12 +254,12 @@ def _center_crop_2d(img, crop=None):
 
     if isinstance(crop, (list, tuple)) and isinstance(crop[0], (list, tuple)):
         pt, second = crop
-        if isinstance(second, int):
-            # ((cy, cx), r) -> center crop
+        if isinstance(second, (int, float)):
+            # ((cy, cx), w) -> square of side w centered on (cy, cx)
             cy, cx = pt
-            r = second
-            y0 = max(0, int(cy) - r); x0 = max(0, int(cx) - r)
-            y1 = min(H, int(cy) + r); x1 = min(W, int(cx) + r)
+            half = int(second) // 2
+            y0 = max(0, int(cy) - half); x0 = max(0, int(cx) - half)
+            y1 = min(H, int(cy) + half); x1 = min(W, int(cx) + half)
         else:
             # ((y0, x0), (y1, x1)) -> arbitrary crop
             (y0, x0), (y1, x1) = pt, second
@@ -664,7 +679,9 @@ def plot_multichannel_plane_montage(
     scalebar_panel="ll",
     scalebar_position="ll",
     scalebar_linewidth=3,
-    scalebar_fontsize=10,    
+    scalebar_fontsize=10,
+    merge_only=False,
+    merge_label="Merge",
 ):
     """
     Plot a single-plane or projected multichannel montage for one or more TIFF movies.
@@ -725,7 +742,7 @@ def plot_multichannel_plane_montage(
         Crop to apply before plotting.
         - int: centered square crop of that size
         - (h, w): centered rectangular crop
-        - ((cy, cx), r): square crop centered at (cy, cx) with half-width r
+        - ((cy, cx), w): square of side w centered at (cy, cx)
         - ((y0, x0), (y1, x1)): arbitrary crop from top-left to bottom-right
         - None: no cropping
 
@@ -842,7 +859,7 @@ def plot_multichannel_plane_montage(
     if axes_use is None and define_axes:
         from . import gui as _gui
         first_path = movies[0] if isinstance(movies[0], (str, Path)) else None
-        axes_use = "".join(_gui.define_video_axes(path=first_path).axes)
+        axes_use = _gui_labels_to_axes_str(_gui.define_video_axes(path=first_path).axes)
 
     loaded = []
     for movie in movies:
@@ -879,19 +896,25 @@ def plot_multichannel_plane_montage(
     if len(palette) != C:
         raise ValueError(f"palette must have length {C}, got {len(palette)}")
 
+    # None entries in palette hide that channel's panel and exclude it from the merge
+    visible_chs = [i for i, p in enumerate(palette) if p is not None]
+    if not visible_chs:
+        raise ValueError("palette must have at least one non-None color.")
+    visible_palette = [palette[i] for i in visible_chs]
+
     if labels is None:
         channel_labels = _get_default_channel_labels(C)
         add_channel_labels = False
     else:
         if len(labels) != C:
             raise ValueError(f"labels must have length {C}, got {len(labels)}")
-        channel_labels = list(labels)
-        add_channel_labels = True
+        channel_labels = [l if l is not None else "" for l in labels]
+        add_channel_labels = any(l is not None for l in labels)
 
     if movie_labels is not None and len(movie_labels) != n_movies:
         raise ValueError(f"movie_labels must have length {n_movies}, got {len(movie_labels)}")
 
-    n_panels_per_movie = C + 1  # grayscale channels + merge
+    n_panels_per_movie = 1 if merge_only else len(visible_chs) + 1
 
     if arrange not in ("row", "column"):
         raise ValueError("arrange must be 'row' or 'column'")
@@ -903,16 +926,35 @@ def plot_multichannel_plane_montage(
         nrows = n_panels_per_movie
         ncols = n_movies
 
+    # Compute panel aspect ratio from the actual (cropped) image size so the
+    # figure dimensions match and imshow never letterboxes into the background.
+    _Y, _X = loaded[0].shape[3], loaded[0].shape[4]
+    _dummy = _center_crop_2d(np.zeros((_Y, _X), dtype=np.float32), crop=crop)
+    _panel_h_px, _panel_w_px = _dummy.shape
+    _panel_aspect = _panel_h_px / max(_panel_w_px, 1)  # height / width
+
     if fig_height is None:
-        fig_h = figsize_scale * nrows
         fig_w = figsize_scale * ncols
+        fig_h = figsize_scale * _panel_aspect * nrows
     else:
         fig_h = float(fig_height)
-        fig_w = fig_h * (ncols / nrows)
+        _panel_h_in = fig_h / nrows
+        fig_w = (_panel_h_in / max(_panel_aspect, 1e-6)) * ncols
 
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), squeeze=False)
 
-    plt.subplots_adjust(wspace=panel_pad, hspace=panel_pad)
+    # Zero outer margins so the axes fill the figure; tight_layout then
+    # expands them just enough to avoid clipping any visible titles/labels.
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1,
+                        wspace=panel_pad, hspace=panel_pad)
+    has_labels = (add_channel_labels or title is not None
+                  or movie_labels is not None or merge_label is not None)
+    if has_labels:
+        try:
+            fig.tight_layout(pad=max(panel_pad, 0.02),
+                             w_pad=panel_pad, h_pad=panel_pad)
+        except Exception:
+            pass
 
     if bg not in ("white", "black"):
         raise ValueError("bg must be 'white' or 'black'")
@@ -964,10 +1006,14 @@ def plot_multichannel_plane_montage(
                 }
             )
 
-        merge_rgb = _make_rgb_merge(gray_imgs_norm, palette)
+        visible_imgs = [gray_imgs_norm[c] for c in visible_chs]
+        merge_rgb = _make_rgb_merge(visible_imgs, visible_palette)
 
-        row_panels = [("gray", c, gray_imgs_norm[c]) for c in range(C_this)]
-        row_panels.append(("Merge", None, merge_rgb))
+        if merge_only:
+            row_panels = [("Merge", None, merge_rgb)]
+        else:
+            row_panels = [("gray", c, gray_imgs_norm[c]) for c in visible_chs]
+            row_panels.append(("Merge", None, merge_rgb))
         panel_data.append(row_panels)
 
         for p_idx, (ptype, c_idx, panel_img) in enumerate(row_panels):
@@ -982,29 +1028,32 @@ def plot_multichannel_plane_montage(
                 spine.set_visible(False)
             
             if ptype == "Merge":
-                ax.imshow(panel_img)
+                ax.imshow(panel_img, aspect='auto')
             else:
-                ax.imshow(panel_img, cmap=grayscale_cmap, vmin=0, vmax=1)
+                ax.imshow(panel_img, cmap=grayscale_cmap, vmin=0, vmax=1, aspect='auto')
 
             ax.set_xticks([])
             ax.set_yticks([])
 
             if ptype == "Merge":
-                panel_label = "Merge"
+                panel_label = merge_label  # None suppresses the label
             else:
                 panel_label = channel_labels[c_idx]
 
             label_color = palette[c_idx] if ptype != "Merge" else text_color
+            show_this_label = panel_label is not None and (
+                add_channel_labels or ptype == "Merge"
+            )
 
             if arrange == "row":
-                if add_channel_labels or ptype == "Merge":
+                if show_this_label:
                     ax.set_title(panel_label, fontsize=label_fontsize, color=label_color)
                 if movie_labels is not None and p_idx == 0:
                     ax.set_ylabel(movie_labels[m_idx], fontsize=label_fontsize, color=text_color)
             else:
                 if movie_labels is not None and p_idx == 0:
                     ax.set_title(movie_labels[m_idx], fontsize=label_fontsize, color=text_color)
-                if add_channel_labels or ptype == "Merge":
+                if show_this_label:
                     if m_idx == 0:
                         ax.set_ylabel(
                             panel_label,
@@ -1454,3 +1503,401 @@ def show_rgb_frame(rgb_movie, t=0, figsize=(6, 6)):
 def save_rgb_gif(rgb_movie, out_path, fps=5):
     import imageio.v2 as imageio
     imageio.mimsave(out_path, rgb_movie, duration=1 / fps)
+
+
+def save_montage_movie(
+    tiff_movies,
+    out_path,
+    *,
+    n_t: int | tuple | None = None,
+    z=0,
+    fps: float = 5,
+    dt: float | None = None,
+    timestamp_units: str = "s",
+    show_timestamp: bool = True,
+    timestamp_panel: str = "ll",
+    timestamp_position: str = "ll",
+    timestamp_fontsize: int | None = None,
+    timestamp_bg_alpha: float = 0.6,
+    merge_only: bool = False,
+    preview_t: int = 0,
+    skip_preview: bool = False,
+    ffmpeg_preset: str = "medium",
+    **montage_kwargs,
+):
+    """
+    Save a movie of plot_multichannel_plane_montage frames across all timepoints.
+
+    Shows a preview of one frame first and asks for confirmation before rendering
+    the full movie (which can be slow). Pass skip_preview=True to bypass.
+
+    Parameters
+    ----------
+    tiff_movies
+        One movie path/array or a list of them (same as plot_multichannel_plane_montage).
+    out_path
+        Output path. Extension sets format: .mp4, .avi, .gif, .tif/.tiff.
+    n_t
+        Number of timepoints to render. If None (default), uses the full movie length.
+    z
+        Z index or projection range (passed through to montage).
+    fps
+        Frames per second for video/GIF output.
+    dt
+        Seconds per frame. If provided, timestamp reads "t = X.X s"; otherwise "t = N".
+    timestamp_units
+        Units label shown in timestamp when dt is set (default 's').
+    merge_only
+        If True, only the merged RGB panel is shown (individual channels hidden).
+    preview_t
+        Timepoint index for the preview frame (default 0).
+    skip_preview
+        If True, skip the interactive preview + confirmation and render immediately.
+    **montage_kwargs
+        All other arguments forwarded to plot_multichannel_plane_montage.
+        Supported extras: define_axes (bool), axes (str), and all montage params.
+        Do not pass t, z, show, or return_fig.
+    """
+    # ── 1. Resolve axes string once ───────────────────────────────────────────
+    if montage_kwargs.pop("define_axes", False):
+        first_movie = tiff_movies if not isinstance(tiff_movies, (list, tuple)) else tiff_movies[0]
+        from . import gui as _gui
+        first_path = first_movie if isinstance(first_movie, (str, Path)) else None
+        axes_str = _gui_labels_to_axes_str(_gui.define_video_axes(path=first_path).axes)
+    else:
+        axes_str = montage_kwargs.pop("axes", None)
+
+    # ── 2. Pre-load all movies once (avoids re-reading TIFF every frame) ──────
+    movies_list = tiff_movies if isinstance(tiff_movies, (list, tuple)) else [tiff_movies]
+    preloaded = []
+    for m in movies_list:
+        if axes_str is not None:
+            arr = _load_as_TZCYX_from_axes(m, axes_str)
+        else:
+            arr = _load_as_TZCYX(
+                m,
+                stack_n=montage_kwargs.get("stack_n"),
+                image_n=montage_kwargs.get("image_n"),
+                ch_n=montage_kwargs.get("ch_n"),
+                x_dim=montage_kwargs.get("x_dim"),
+                y_dim=montage_kwargs.get("y_dim"),
+            )
+        preloaded.append(arr)
+
+    # Arrays are now canonical TZCYX — strip loading-related kwargs but keep axes="TZCYX"
+    # so plot_multichannel_plane_montage uses _load_as_TZCYX_from_axes (silent no-op)
+    # instead of _infer_axis_order which prints "Axis order ambiguous" once per frame.
+    for _k in ("stack_n", "image_n", "ch_n", "x_dim", "y_dim"):
+        montage_kwargs.pop(_k, None)
+    montage_kwargs["axes"] = "TZCYX"
+
+    tiff_movies_loaded = preloaded if len(preloaded) > 1 else preloaded[0]
+
+    # Resolve n_t into a sequence of frame indices
+    T = preloaded[0].shape[0]
+    if n_t is None:
+        t_indices = range(T)
+    elif isinstance(n_t, int):
+        t_indices = range(min(n_t, T))
+    elif isinstance(n_t, (tuple, list)) and len(n_t) == 3:
+        start, stop, step = n_t
+        if stop is None:
+            stop = T
+        t_indices = range(start, min(stop, T), step)
+    else:
+        raise TypeError(
+            "n_t must be None, an int, or a (start, stop, step) tuple "
+            "(use stop=None to go to end of movie)"
+        )
+    n_t = len(t_indices)
+
+    # ── 3. Rendering parameters ───────────────────────────────────────────────
+    text_color = "white" if montage_kwargs.get("bg", "white") == "black" else "black"
+    label_fontsize = montage_kwargs.get("label_fontsize", 11)
+    _ts_fs = timestamp_fontsize if timestamp_fontsize is not None else label_fontsize
+    _ts_inner = {
+        "ll": (0.03, 0.03, "bottom", "left"),
+        "lr": (0.97, 0.03, "bottom", "right"),
+        "ul": (0.03, 0.97, "top",    "left"),
+        "ur": (0.97, 0.97, "top",    "right"),
+    }
+    _ts_x, _ts_y, _ts_va, _ts_ha = _ts_inner.get(timestamp_position, (0.03, 0.03, "bottom", "left"))
+    _n_movies = len(preloaded)
+    _arrange  = montage_kwargs.get("arrange", "row")
+
+    # Build a timestamp formatter that auto-selects SS / MM:SS / HH:MM:SS
+    _UNITS_TO_S = {"s": 1.0, "sec": 1.0, "ms": 0.001, "min": 60.0, "h": 3600.0, "hr": 3600.0}
+    _unit_factor = _UNITS_TO_S.get(timestamp_units.lower(), 1.0) if dt is not None else 1.0
+    _max_t = (max(t_indices) if len(t_indices) > 0 else 0) if dt is not None else 0
+    _total_s = _max_t * dt * _unit_factor if dt is not None else 0.0
+
+    def _fmt_ts(t_i):
+        if dt is None:
+            return f"t = {t_i}"
+        t_s = t_i * dt * _unit_factor
+        if _total_s < 60:
+            return f"{int(round(t_s)):02d}"
+        elif _total_s < 3600:
+            m, s = divmod(int(round(t_s)), 60)
+            return f"{m:02d}:{s:02d}"
+        else:
+            h, rem = divmod(int(round(t_s)), 3600)
+            m, s = divmod(rem, 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
+    # Derive visible channels so we can recompute panel images cheaply per frame
+    _raw_palette = montage_kwargs.get("palette", None)
+    _C = preloaded[0].shape[2]
+    if _raw_palette is None:
+        _default_pal = ["green", "magenta", "cyan", "red", "yellow", "blue", "orange", "white"]
+        _raw_palette = _default_pal[:_C]
+    _visible_chs     = [i for i, p in enumerate(_raw_palette) if p is not None]
+    _visible_palette = [_raw_palette[i] for i in _visible_chs]
+    _n_panels        = 1 if merge_only else len(_visible_chs) + 1
+    _int_range = montage_kwargs.get("int_range", (0.02, 0.98))
+    _crop      = montage_kwargs.get("crop", None)
+    _t_proj    = montage_kwargs.get("t_project", "max")
+    _z_proj    = montage_kwargs.get("z_project", "max")
+
+    # Pre-compute per-channel intensity ranges from the full (uncropped) movie.
+    # Quantile-based ranges are resolved once here so they're stable across frames
+    # and independent of the crop setting.
+    _ch_ranges_raw = _resolve_channel_int_ranges(_int_range, _C)
+    _global_int_ranges = []  # list of (vmin, vmax) per channel
+    t_list = list(t_indices)
+    print("  Computing global intensity ranges...", end="\r")
+    for c in range(_C):
+        low, high = _ch_ranges_raw[c]
+        if low <= 1.0 and high <= 1.0:
+            # Collect uncropped pixel values across all frames and all movies
+            all_px = []
+            for movie_data in preloaded:
+                if isinstance(z, int):
+                    all_px.append(movie_data[t_list, z, c, :, :].ravel())
+                else:
+                    z0, z1 = z
+                    all_px.append(movie_data[t_list, z0:z1+1, c, :, :].ravel())
+            px = np.concatenate(all_px).astype(np.float32)
+            _global_int_ranges.append((float(np.quantile(px, low)),
+                                       float(np.quantile(px, high))))
+        else:
+            _global_int_ranges.append((float(low), float(high)))
+    print(f"  Global intensity ranges: { {c: _global_int_ranges[c] for c in range(_C)} }")
+
+    def _apply_norm(img, vmin, vmax):
+        img_f = np.asarray(img, dtype=np.float32)
+        if vmax > vmin:
+            return np.clip((img_f - vmin) / (vmax - vmin), 0.0, 1.0)
+        return np.zeros_like(img_f)
+
+    def _panels_for_frame(movie_data, t_i):
+        reduced = _extract_plane_or_projection(
+            movie_data, t=t_i, z=z, t_project=_t_proj, z_project=_z_proj,
+        )
+        gray_norm = []
+        for c in range(reduced.shape[0]):
+            img = _center_crop_2d(reduced[c], crop=_crop)
+            vmin, vmax = _global_int_ranges[c]
+            gray_norm.append(_apply_norm(img, vmin, vmax))
+        vis_imgs = [gray_norm[c] for c in _visible_chs]
+        merge_rgb = _make_rgb_merge(vis_imgs, _visible_palette)
+        if merge_only:
+            return [merge_rgb]
+        return [gray_norm[c] for c in _visible_chs] + [merge_rgb]
+
+    # ── 4. Build figure once; collect per-panel AxesImage references ──────────
+    # Use the pre-computed global ranges for the initial figure too
+    montage_kwargs["int_range"] = _global_int_ranges
+    montage_kwargs["merge_only"] = merge_only
+    fig, axes_arr, _ = plot_multichannel_plane_montage(
+        tiff_movies=tiff_movies_loaded,
+        t=0, z=z, show=False, return_fig=True,
+        **montage_kwargs,
+    )
+
+    # (m_idx, p_idx) -> AxesImage for cheap per-frame set_data() updates
+    _panel_ims = {}
+    for mi in range(_n_movies):
+        for pi in range(_n_panels):
+            ax = axes_arr[mi, pi] if _arrange == "row" else axes_arr[pi, mi]
+            if ax.get_visible() and ax.images:
+                _panel_ims[(mi, pi)] = ax.images[0]
+
+    # Add timestamp text once; update its string per frame
+    _ts_text = None
+    if show_timestamp:
+        all_ax_flat = list(axes_arr.flat)
+        target_ax = None
+        for flat_idx, ax in enumerate(all_ax_flat):
+            if not ax.get_visible():
+                continue
+            if _arrange == "row":
+                mi, pi = divmod(flat_idx, _n_panels)
+            else:
+                pi, mi = divmod(flat_idx, _n_movies)
+            if _panel_matches_scalebar_location(
+                m_idx=mi, p_idx=pi,
+                n_movies=_n_movies, n_panels_per_movie=_n_panels,
+                arrange=_arrange, scalebar_panel=timestamp_panel,
+            ):
+                target_ax = ax
+                break
+        if target_ax is None:
+            target_ax = next((ax for ax in all_ax_flat if ax.get_visible()), None)
+        if target_ax is not None:
+            ts0 = _fmt_ts(0)
+            _ts_bbox = (
+                dict(boxstyle="round,pad=0.2",
+                     fc="black" if text_color == "white" else "white",
+                     alpha=timestamp_bg_alpha, ec="none")
+                if timestamp_bg_alpha > 0 else None
+            )
+            _ts_text = target_ax.text(
+                _ts_x, _ts_y, ts0, transform=target_ax.transAxes,
+                color=text_color, fontsize=_ts_fs, va=_ts_va, ha=_ts_ha,
+                bbox=_ts_bbox,
+            )
+
+    def _update_figure(t_i) -> np.ndarray:
+        """Update panel images + timestamp for time t_i; return captured RGB frame."""
+        for mi, movie_data in enumerate(preloaded):
+            for pi, panel_img in enumerate(_panels_for_frame(movie_data, t_i)):
+                if (mi, pi) in _panel_ims:
+                    _panel_ims[(mi, pi)].set_data(panel_img)
+        if _ts_text is not None:
+            ts = _fmt_ts(t_i)
+            _ts_text.set_text(ts)
+        fig.canvas.draw()
+        return np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
+
+    # ── 5. Preview + confirmation ─────────────────────────────────────────────
+    if not skip_preview:
+        print(f"Rendering preview (t={preview_t})...")
+        _update_figure(preview_t)
+        # IPython.display.display is more reliable than plt.show() in Jupyter
+        # because it flushes the figure to cell output before input() renders.
+        try:
+            from IPython.display import display as _ipy_display
+            _ipy_display(fig)
+        except Exception:
+            plt.show()
+        answer = input(f"Save full movie ({n_t} frames) to {out_path}? [y/N]: ").strip().lower()
+        if answer not in ("y", "yes"):
+            plt.close(fig)
+            print("Cancelled.")
+            return
+
+    # ── 6. Render + write (streaming for mp4/avi to avoid RAM accumulation) ───
+    out_path = Path(out_path)
+    suffix = out_path.suffix.lower()
+
+    if suffix in (".mp4", ".avi"):
+        import subprocess, shutil as _shutil, sys, tempfile as _tempfile
+        ffmpeg_exe = _shutil.which("ffmpeg")
+        if ffmpeg_exe is None:
+            _conda_ff = Path(sys.executable).parent.parent / "Library" / "bin" / "ffmpeg.exe"
+            if _conda_ff.exists():
+                ffmpeg_exe = str(_conda_ff)
+        if ffmpeg_exe is None:
+            raise RuntimeError(
+                "ffmpeg not found. Install with: conda install -c conda-forge ffmpeg"
+            )
+        # Render first frame to learn pixel dimensions
+        t_iter = iter(t_indices)
+        t0 = next(t_iter)
+        print(f"  frame 1/{n_t} (t={t0})", end="\r")
+        frame0 = _update_figure(t0)
+        h, w = frame0.shape[:2]
+        codec = "ffv1" if suffix == ".avi" else "libx264"
+        # Write to a local temp file first — avoids slow NAS writes during encoding
+        tmp_fd, tmp_path = _tempfile.mkstemp(suffix=suffix)
+        os.close(tmp_fd)
+        try:
+            cmd = [
+                ffmpeg_exe, "-y",
+                "-f", "rawvideo", "-vcodec", "rawvideo",
+                "-s", f"{w}x{h}", "-pix_fmt", "rgb24",
+                "-r", str(fps),
+                "-i", "pipe:0",
+                "-vcodec", codec,
+            ]
+            if suffix == ".mp4":
+                cmd += ["-crf", "18", "-preset", ffmpeg_preset, "-pix_fmt", "yuv420p"]
+            cmd.append(tmp_path)
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc.stdin.write(frame0.tobytes())
+            for i, t_i in enumerate(t_iter, start=2):
+                if i % 10 == 0:
+                    print(f"  frame {i}/{n_t} (t={t_i})", end="\r")
+                proc.stdin.write(_update_figure(t_i).tobytes())
+            proc.stdin.close()
+            plt.close(fig)
+            print(f"  frame {n_t}/{n_t} — done.")
+
+            # Stream-parse ffmpeg stderr for progress while encoding
+            import threading, time as _time
+            _enc_frame = [0]
+            _stderr_buf = [b""]
+            _stderr_lines = []
+
+            def _read_stderr(pipe):
+                buf = b""
+                while True:
+                    ch = pipe.read(1)
+                    if not ch:
+                        break
+                    if ch in (b"\r", b"\n"):
+                        line = buf.decode("utf-8", errors="replace")
+                        _stderr_lines.append(line)
+                        if "frame=" in line:
+                            try:
+                                _enc_frame[0] = int(line.split("frame=")[1].split()[0])
+                            except Exception:
+                                pass
+                        buf = b""
+                    else:
+                        buf += ch
+
+            _t = threading.Thread(target=_read_stderr, args=(proc.stderr,), daemon=True)
+            _t.start()
+
+            print()
+            while proc.poll() is None:
+                f = _enc_frame[0]
+                pct = int(100 * f / max(n_t, 1))
+                filled = pct // 5
+                bar = "█" * filled + "░" * (20 - filled)
+                print(f"  Encoding [{bar}] {pct:3d}%  {f}/{n_t} frames", end="\r")
+                _time.sleep(0.2)
+
+            _t.join()
+            bar = "█" * 20
+            print(f"  Encoding [{bar}] 100%  {n_t}/{n_t} frames")
+
+            if proc.returncode != 0:
+                raise RuntimeError("ffmpeg failed:\n" + "\n".join(_stderr_lines))
+            print(f"  Copying to final destination...")
+            _shutil.move(tmp_path, str(out_path))
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
+    else:
+        # For tif/gif: accumulate frames then write
+        frames = []
+        for i, t_i in enumerate(t_indices, start=1):
+            if i % 10 == 0:
+                print(f"  frame {i}/{n_t} (t={t_i})", end="\r")
+            frames.append(_update_figure(t_i))
+        plt.close(fig)
+        print(f"  frame {n_t}/{n_t} — done.  Writing {suffix}...")
+        if suffix in (".tif", ".tiff"):
+            import tifffile as _tiff
+            _tiff.imwrite(str(out_path), np.stack(frames), photometric="rgb",
+                          imagej=True, metadata={"axes": "TYXS"})
+        else:
+            import imageio.v2 as imageio
+            imageio.mimsave(str(out_path), frames, fps=fps)
+
+    print(f"Saved → {out_path}")
