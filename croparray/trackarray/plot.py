@@ -409,6 +409,7 @@ def plot_track_signal_traces(
     legend_loc: str = "upper right",
     show_legend: bool = True,
     despine: bool = False,
+    show_titles: bool = True,
     save_path: Optional[str] = None,
     transparent: bool = False,
 ) -> None:
@@ -455,6 +456,8 @@ def plot_track_signal_traces(
     despine
         If True, remove the top (and, for single-axis plots, right) spine so panels
         read as open axes rather than a boxed frame.
+    show_titles
+        If False, skip the per-panel "Track N" title.
     save_path
         If given, save the figure here instead of displaying it inline.
     transparent
@@ -608,7 +611,8 @@ def plot_track_signal_traces(
                     color=_y2_color, s=scatter_size, legend=False,
                 )
 
-        ax.set_title(f"Track {int(track_id)}")
+        if show_titles:
+            ax.set_title(f"Track {int(track_id)}")
         ax.set_xlabel(time_label)
         ax.set_ylabel(f"{var} (a.u.)")
         if ylim is not None:
