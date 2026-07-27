@@ -412,6 +412,7 @@ def plot_track_signal_traces(
     despine: bool = False,
     show_titles: bool = True,
     sharex: bool = False,
+    share_ylabel: bool = False,
     hspace: Optional[float] = None,
     save_path: Optional[str] = None,
     transparent: bool = False,
@@ -467,6 +468,9 @@ def plot_track_signal_traces(
     sharex
         If True, hide the x tick labels and x-axis label on every panel except the
         bottom-most one in each column, for a compressed, stacked-traces look.
+    share_ylabel
+        If True, remove the per-panel "{var} (a.u.)" y-axis label and instead draw a
+        single shared label for the whole figure (via `fig.supylabel`).
     hspace
         Vertical spacing between rows, passed to `fig.subplots_adjust`. Use a small
         or negative value (e.g. 0 or slightly negative) together with `sharex=True`
@@ -627,7 +631,10 @@ def plot_track_signal_traces(
         if show_titles:
             ax.set_title(f"Track {int(track_id)}")
         ax.set_xlabel(time_label)
-        ax.set_ylabel(f"{var} (a.u.)")
+        if share_ylabel:
+            ax.set_ylabel("")  # clear seaborn's default "{var}" label left by lineplot/scatterplot
+        else:
+            ax.set_ylabel(f"{var} (a.u.)")
         if ylim is not None:
             ax.set_ylim(ylim)
         if xlim is not None:
@@ -691,6 +698,9 @@ def plot_track_signal_traces(
                     ax.set_xlabel("")
                     ax.tick_params(labelbottom=False)
 
+    if share_ylabel:
+        fig.supylabel(f"{var} (a.u.)", fontsize=plt.rcParams["axes.labelsize"])
+
     if legend_loc == "outside":
         fig.subplots_adjust(right=0.82)
 
@@ -720,9 +730,12 @@ def trajectories_xy(
     time_var: str = "t",
     time_palette: str = "viridis",
     add_colorbar: bool = True,
+    colorbar_label: str | None = None,
     label_tracks: bool = False,
     label_offset: float = 0.1,
     label_fontsize: float = 8,
+    xlim=None,
+    ylim=None,
     facet_kws: dict | None = None,
     **kwargs,
 ):
@@ -758,6 +771,11 @@ def trajectories_xy(
         Matplotlib colormap name for time coloring.
     add_colorbar : bool
         If True and color_time=True, add a shared colorbar.
+    colorbar_label : str or None
+        Manual override for the colorbar label (e.g. "time (min)"). If None,
+        the label is built from `time_var` plus the dataset's own time units
+        (`ds.attrs["t_units"]`, falling back to `ds[time_var].attrs["units"]`),
+        e.g. "t (sec)", or just `time_var` if no units are found.
     label_tracks : bool
         If True, label each trajectory at its first valid point using track_id.
     label_offset : float
@@ -765,6 +783,8 @@ def trajectories_xy(
         Interpreted in plot coordinates.
     label_fontsize : float
         Font size for trajectory labels.
+    xlim, ylim : tuple or None
+        Manual axis limits applied to every facet, e.g. `xlim=(0, 50)`.
     facet_kws : dict or None
         Extra kwargs passed to seaborn.FacetGrid.
     **kwargs
@@ -1000,7 +1020,16 @@ def trajectories_xy(
             cax = g.figure.add_axes([0.95, 0.2, 0.02, 0.6])
 
             cbar = g.figure.colorbar(sm, cax=cax)
-            cbar.set_label(time_var)
+
+            if colorbar_label is not None:
+                label = colorbar_label
+            else:
+                t_units = ds.attrs.get("t_units")
+                if not t_units and time_var in ds.coords:
+                    t_units = ds[time_var].attrs.get("units")
+                label = f"{time_var} ({t_units})" if t_units else time_var
+
+            cbar.set_label(label)
 
     # ---- axis labels ----
     xlabel = "x"
@@ -1014,10 +1043,14 @@ def trajectories_xy(
 
     g.set_axis_labels(xlabel, ylabel)
 
-    # ---- equal aspect ----
+    # ---- equal aspect + manual axis limits ----
     for ax in g.axes.flat:
         if ax is not None:
             ax.set_aspect("equal")
+            if xlim is not None:
+                ax.set_xlim(xlim)
+            if ylim is not None:
+                ax.set_ylim(ylim)
 
     # ---- title ----
     title = "XY trajectories"
